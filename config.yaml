@@ -17,7 +17,7 @@ llm_external_provider: local-first
 
 # MLX server URL. Default matches the superrepo MLX install (Qwen3-4B-4bit).
 mlx_server_url: http://127.0.0.1:5044
-mlx_default_model: mlx-community/Qwen3-4B-4bit
+mlx_default_model: mlx-community/Qwen3.6-35B-A3B-4bit-DWQ
 
 # DeepSeek (set DEEPSEEK_API_KEY in your shell — never check secrets into git).
 deepseek_model: deepseek-chat
