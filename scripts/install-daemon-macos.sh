@@ -98,7 +98,7 @@ if $INSTALL_RERANK && [ -f "$REPO_DIR/daemons/autopilot-rerank.plist.template" ]
         -e "s|__USER__|$USER_NAME|g" \
         "$REPO_DIR/daemons/autopilot-rerank.plist.template" > "$RERANK_TMP"
 
-    if launchctl list 2>/dev/null | grep -q com.localautopilot.rerank; then
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.rerank"* ]]; then
         launchctl bootout "gui/$(id -u)" "$RERANK_PLIST" 2>/dev/null || true
     fi
     cp "$RERANK_TMP" "$RERANK_PLIST"
@@ -121,13 +121,14 @@ if $INSTALL_PRUNE && [ -f "$REPO_DIR/daemons/autopilot-prune.plist.template" ]; 
         -e "s|__USER__|$USER_NAME|g" \
         "$REPO_DIR/daemons/autopilot-prune.plist.template" > "$PRUNE_TMP"
 
-    if launchctl list 2>/dev/null | grep -q com.localautopilot.prune; then
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.prune"* ]]; then
         launchctl bootout "gui/$(id -u)" "$PRUNE_PLIST" 2>/dev/null || true
     fi
     cp "$PRUNE_TMP" "$PRUNE_PLIST"
     chmod 644 "$PRUNE_PLIST"
     rm "$PRUNE_TMP"
-    if launchctl bootstrap "gui/$(id -u)" "$PRUNE_PLIST" 2>/dev/null; then
+    launchctl bootstrap "gui/$(id -u)" "$PRUNE_PLIST" 2>/dev/null || true
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.prune"* ]]; then
         _ok "prune job loaded (daily 04:30)"
     else
         echo "[install-daemon] WARN: prune plist install failed (non-fatal)"
