@@ -407,6 +407,32 @@ class DeepExplorer:
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
 
+        # ROOT-CAUSE FIX (I7, 2026-05-14): 3s-brainstorm.sh now emits a final
+        # `BRAINSTORM_RESULT=success|partial|failed` marker line and exits non-
+        # zero on partial/failed. We trust that marker over the rc heuristic
+        # below because old runs (before this fix landed) had no marker at all
+        # and produced silent partials for 3+ hours. Falls back to legacy rc
+        # heuristic when the marker is absent (older script versions).
+        result_marker = None
+        m_marker = re.search(
+            r"^BRAINSTORM_RESULT=(success|partial|failed)\s*$",
+            stdout + "\n" + stderr,
+            re.M,
+        )
+        if m_marker:
+            result_marker = m_marker.group(1)
+            if result_marker != "success":
+                _bump_counter(
+                    "autopilot_brainstorm_failures",
+                    note=f"marker={result_marker}:rc={proc.returncode}",
+                )
+                logger.warning(
+                    "3s-brainstorm marker=%s rc=%s — partial/failed run, "
+                    "see /tmp/brainstorm-events.log",
+                    result_marker,
+                    proc.returncode,
+                )
+
         # Cost extraction — the script writes a `cost_usd_total: ...` line near
         # the bottom. Best-effort, default 0.0.
         cost = 0.0
@@ -441,22 +467,35 @@ class DeepExplorer:
         # ZSF: non-zero exit doesn't fail-hard — we already captured stdout.
         # The brainstorm script is `set -u` not `set -e`, so partial completion
         # is the common case. We trust the artefact-path heuristic.
-        ok = bool(stdout.strip()) and (
-            proc.returncode == 0 or artefact_path is not None
-        )
+        # Marker-aware (I7): when BRAINSTORM_RESULT= is present, it is the
+        # source of truth — overrides the legacy rc/artefact heuristic so
+        # partial/failed runs surface as ok=False even when there's an artefact.
+        if result_marker is not None:
+            ok = (result_marker == "success")
+        else:
+            ok = bool(stdout.strip()) and (
+                proc.returncode == 0 or artefact_path is not None
+            )
         if not ok:
+            note_suffix = f":marker={result_marker}" if result_marker else ""
             _bump_counter(
                 "deep_exploration_errors",
-                note=f"brainstorm_empty_or_failed:rc={proc.returncode}",
+                note=f"brainstorm_empty_or_failed:rc={proc.returncode}{note_suffix}",
             )
             logger.warning(
-                "3s-brainstorm returned empty/failure (rc=%s): stderr=%s",
+                "3s-brainstorm returned empty/failure (rc=%s marker=%s): stderr=%s",
                 proc.returncode,
+                result_marker or "absent",
                 stderr[:400],
+            )
+            err_tag = (
+                f"brainstorm_marker:{result_marker}"
+                if result_marker
+                else f"brainstorm_rc:{proc.returncode}"
             )
             return BrainstormResult(
                 ok=False,
-                error=f"brainstorm_rc:{proc.returncode}",
+                error=err_tag,
                 body=stdout,
                 latency_s=latency,
                 cost_usd=cost,
