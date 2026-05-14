@@ -22,6 +22,9 @@
 #   2 — pip install failed
 #   3 — DB / state initialisation failed
 #   4 — pytest smoke check failed
+#   5 — preflight check failed (no working LLM provider / missing runtime deps)
+#       Set LOCAL_AUTOPILOT_INSTALL_LENIENT=1 to downgrade this to a warning
+#       (useful for CI / fresh-machine setup before API keys are configured).
 #
 # Re-run anytime. Safe to invoke from any cwd; the script cd's to its own dir.
 
@@ -137,7 +140,24 @@ else
     die "pytest smoke check failed — see /tmp/local-autopilot-install-pytest.log" 4
 fi
 
-# --- 7. Next steps -----------------------------------------------------------
+# --- 7. Preflight: verify a working LLM provider + runtime deps -------------
+log "running scripts/preflight.sh --quiet"
+if bash "$REPO_DIR/scripts/preflight.sh" --quiet; then
+    log "preflight green — all runtime dependencies satisfied"
+else
+    PREFLIGHT_RC=$?
+    if [ "${LOCAL_AUTOPILOT_INSTALL_LENIENT:-0}" = "1" ]; then
+        warn "preflight reported $PREFLIGHT_RC failing check(s), but LOCAL_AUTOPILOT_INSTALL_LENIENT=1 is set — continuing"
+        warn "re-run \`bash scripts/preflight.sh\` after configuring API keys / MLX to see the dashboard"
+    else
+        printf '[install][error] preflight reported %s failing check(s) — Local Autopilot has no working LLM provider.\n' "$PREFLIGHT_RC" >&2
+        printf '[install][error] Run \`bash scripts/preflight.sh\` to see the full dashboard and fix the missing deps.\n' >&2
+        printf '[install][error] To install anyway (e.g. CI / before keys are set), re-run with LOCAL_AUTOPILOT_INSTALL_LENIENT=1.\n' >&2
+        exit 5
+    fi
+fi
+
+# --- 8. Next steps -----------------------------------------------------------
 cat <<NEXT
 
   Local Autopilot installed.
