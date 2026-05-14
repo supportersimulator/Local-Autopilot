@@ -201,6 +201,23 @@ def _read_autopilot_mode() -> str:
         return "off"
 
 
+def _reconcile_caffeinate(mode: str) -> None:
+    """Recovery hook: bring caffeinate into agreement with current mode.
+
+    Runs on every tick so that if caffeinate was killed (laptop sleep, OOM,
+    user kill), the next tick re-spawns it when autopilot is on, or stops it
+    if autopilot was turned off out-of-band. ZSF: never raises into the
+    runner — caffeinate is a sidecar, not a critical path. Uses mac3's
+    `caffeinate.sync_with_state` API.
+    """
+    try:
+        import caffeinate  # type: ignore  # sibling module in tools/
+        caffeinate.sync_with_state(mode)
+    except Exception:
+        # No counter bump here — caffeinate module owns its counter surface
+        pass
+
+
 def _read_progress() -> _RunnerProgress:
     p = _progress_path()
     if p.exists():
@@ -889,36 +906,23 @@ def main(argv: Optional[list[str]] = None) -> int:
     mode = _read_autopilot_mode()
     progress = _read_progress()
 
+    # Recovery hook: reconcile caffeinate sidecar with current mode on every
+    # tick. If caffeinate was killed out-of-band (laptop sleep, user kill, OOM),
+    # this re-spawns it when autopilot is on; or stops it if autopilot was
+    # turned off without CLI involvement. Idempotent + ZSF.
+    _reconcile_caffeinate(mode)
+
     # Bypass the off-check in dry-run so CI can prove the state machine works
     # without flipping the real autopilot switch.
     if mode == "off" and not args.dry_run:
         _bump(counters, "cycles_aborted_user_off")
         _write_counters(counters)
-        # Reboot-recovery: if the daemon ticks with mode=off, make sure
-        # caffeinate is also stopped (in case the user toggled off in another
-        # terminal session, or a previous on-tick left it dangling).
-        try:
-            from caffeinate import sync_with_state as _caf_sync  # type: ignore
-            _caf_sync("off")
-        except Exception:  # noqa: BLE001 — ZSF; never block the exit
-            pass
         print(json.dumps({
             "event": "exit",
             "reason": "state.mode == 'off'",
             "mode": mode,
         }))
         return 0
-
-    # Reboot-recovery: if the daemon is ticking with mode != off, caffeinate
-    # should also be running. The user may have set on_permanent, then the
-    # machine rebooted (killing the caffeinate process). Re-spawn idempotently
-    # so sleep is prevented from this tick onward. Failure is non-fatal.
-    if mode in ("on_permanent", "on_temporary") and not args.dry_run:
-        try:
-            from caffeinate import sync_with_state as _caf_sync  # type: ignore
-            _caf_sync(mode)
-        except Exception:  # noqa: BLE001 — ZSF
-            pass
 
     # SIGINT/SIGTERM handling for watch mode: set a flag, finish the current
     # cycle (or break the sleep), then exit cleanly.
