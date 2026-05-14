@@ -158,6 +158,19 @@ class State:
                     "(attempted to=%s)" % (actor, to)
                 )
 
+            # Invariant #1 (race-hardened): atlas can only emit `to=off` when
+            # ending its own on_temporary elevation. Without this, a TOCTOU race
+            # (user-off + atlas-off both target on_permanent → off; user wins
+            # flock first) lets atlas observe frm=off and pass an off→off no-op
+            # past the actor gate. Aaron's spec: "Only user can turn it off" —
+            # so atlas-off from anything other than on_temporary is denied
+            # regardless of what atlas's racy read saw.
+            if actor == "atlas" and to == "off" and frm != "on_temporary":
+                raise PermissionDenied(
+                    "USER_ONLY_DEACTIVATE: atlas cannot emit to=off from %s "
+                    "(only on_temporary→off is permitted for atlas)" % frm
+                )
+
             # Invariant #2: only user may set on_permanent (atlas + system blocked).
             if to == "on_permanent" and actor != "user":
                 raise PermissionDenied(

@@ -350,9 +350,20 @@ def _check_transition(
     if actor not in VALID_ACTORS:
         return False, f"invariant:invalid_actor:{actor}"
 
+    # Actor invariants — evaluated BEFORE the no-op short-circuit. A TOCTOU race
+    # (mac3 2026-05-14) showed that letting `off → off` be a free no-op lets atlas
+    # smuggle a "successful" deactivation past the actor gate when user-off lands
+    # first under flock contention.
+
     # Invariant 4: Atlas CANNOT set on_permanent.
     if actor == "atlas" and new_mode == "on_permanent":
         return False, "invariant:atlas_cannot_set_on_permanent"
+
+    # Invariant 1 (hardened, race-safe): atlas can only emit `to=off` when ending
+    # its own on_temporary elevation. Off→off is denied because semantically that
+    # is "atlas attempted to turn the system off" — Aaron's spec: only user can.
+    if actor == "atlas" and new_mode == "off" and current.mode != "on_temporary":
+        return False, "invariant:user_lock:atlas_off_only_from_temporary"
 
     # Invariant 2 + 5: ONLY user can clear on_permanent.
     if current.mode == "on_permanent" and new_mode == "off" and actor != "user":
@@ -378,9 +389,10 @@ def _check_transition(
         if not has_until and not has_atlas_decision:
             return False, "invariant:temporary_bounded:requires_until_or_atlas_decision"
 
-    # No-op (same mode) is allowed but recorded — but only after every
-    # invariant above has been re-validated. This prevents a stuck bad
-    # state from being perpetuated via repeated same-mode "transitions".
+    # No-op (same mode) is allowed but recorded — only AFTER all actor + bounded
+    # invariants above have been re-validated. Prevents stuck bad states from
+    # being perpetuated via repeated same-mode "transitions" AND closes the
+    # TOCTOU race where atlas could smuggle a successful off→off through.
     if current.mode == new_mode:
         return True, ""
 
