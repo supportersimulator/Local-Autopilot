@@ -92,9 +92,9 @@ So users get an actionable "is my install actually working?" answer in 30 second
 
 ## Gaps NOT fixed (deferred / out of scope)
 
-### A. Dry-run reports `cost_usd_total: 1.35` (LOW — misleading but harmless)
+### A. Dry-run reports `cost_usd_total: 1.35` (FIXED)
 
-**Why deferred:** This is a tracked behaviour in `archloop_runner.py` — dry-runs use a mock cost. Tests assert this value, so changing it requires updating ~5 test files. Worth doing in a follow-up to avoid confusion ("Did I just spend $1.35?"). Suggested fix: dry-run reports `cost_usd_total: 0.00` and `cost_usd_dry_run_mock: 1.35` separately.
+**Status:** Fixed. Dry-runs now report `cost_usd_total: 0.00` (no LLM calls made) and surface the synthetic spawn-cost in a separate `cost_usd_dry_run_mock` field on the cycle summary for debugging. Real cycles unchanged.
 
 ### B. `~/.context-dna/autopilot-logs/` has no rotation (LOW — disk growth over time)
 

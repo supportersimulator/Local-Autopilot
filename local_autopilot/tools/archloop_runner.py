@@ -505,6 +505,9 @@ class CycleResult:
     deep_exploration_reason: str = ""
     deep_exploration_cost_usd: float = 0.0
     complexity_class: str = "LOW"
+    # Mock cost accumulator — only populated on dry-runs so cost-accounting
+    # paths can be exercised without polluting real cost_usd.
+    cost_usd_dry_run_mock: float = 0.0
 
 
 def _ts_dirname() -> str:
@@ -683,8 +686,14 @@ def run_cycle(
     with _stage(timings, "SPAWN_AGENTS"):
         jobs = write_prompts(cycle_dir, prompts_for_spawn)
         _bump(counters, "agent_spawn_total", by=len(jobs))
-        result.cost_usd += COST_PER_AGENT_USD * len(jobs)
-        cost_so_far += COST_PER_AGENT_USD * len(jobs)
+        # Dry-runs make zero LLM calls — charge $0.00 to cost_usd but record
+        # what the mock WOULD have been in cost_usd_dry_run_mock for debugging.
+        agent_charge = COST_PER_AGENT_USD * len(jobs)
+        if dry_run:
+            result.cost_usd_dry_run_mock += agent_charge
+        else:
+            result.cost_usd += agent_charge
+            cost_so_far += agent_charge
 
     # Cost check after the most expensive stage commits.
     if cost_so_far >= cost_cap and not dry_run:
@@ -785,6 +794,7 @@ def run_cycle(
         "verdict_decision": result.verdict_decision,
         "cost_usd_cycle": round(result.cost_usd, 4),
         "cost_usd_total_after_cycle": round(cost_so_far, 4),
+        "cost_usd_dry_run_mock": round(result.cost_usd_dry_run_mock, 4),
         "agents": {
             "pass": result.agent_pass,
             "fail": result.agent_fail,
