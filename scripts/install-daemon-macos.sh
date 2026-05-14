@@ -18,11 +18,13 @@ set -uo pipefail
 
 INTERVAL=1800
 INSTALL_RERANK=false
+INSTALL_PRUNE=false
 DRY_RUN=false
 for arg in "$@"; do
     case "$arg" in
         --interval) shift; INTERVAL="$1"; shift ;;
         --also-rerank) INSTALL_RERANK=true; shift ;;
+        --install-prune) INSTALL_PRUNE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
     esac
 done
@@ -99,6 +101,28 @@ if $INSTALL_RERANK && [ -f "$REPO_DIR/daemons/autopilot-rerank.plist.template" ]
         _ok "rerank job loaded (daily)"
     else
         echo "[install-daemon] WARN: rerank plist install failed (non-fatal)"
+    fi
+fi
+
+# Optionally install the prune job (daily cycle-log retention)
+PRUNE_PLIST="$LAUNCH_AGENTS/com.localautopilot.prune.plist"
+if $INSTALL_PRUNE && [ -f "$REPO_DIR/daemons/autopilot-prune.plist.template" ]; then
+    PRUNE_TMP="$(mktemp)"
+    sed \
+        -e "s|__REPO_DIR__|$REPO_DIR|g" \
+        -e "s|__USER__|$USER_NAME|g" \
+        "$REPO_DIR/daemons/autopilot-prune.plist.template" > "$PRUNE_TMP"
+
+    if launchctl list 2>/dev/null | grep -q com.localautopilot.prune; then
+        launchctl bootout "gui/$(id -u)" "$PRUNE_PLIST" 2>/dev/null || true
+    fi
+    cp "$PRUNE_TMP" "$PRUNE_PLIST"
+    chmod 644 "$PRUNE_PLIST"
+    rm "$PRUNE_TMP"
+    if launchctl bootstrap "gui/$(id -u)" "$PRUNE_PLIST" 2>/dev/null; then
+        _ok "prune job loaded (daily 04:30)"
+    else
+        echo "[install-daemon] WARN: prune plist install failed (non-fatal)"
     fi
 fi
 

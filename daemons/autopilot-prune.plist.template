@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local Autopilot — daily prune job for old cycle-log directories (macOS launchd).
+
+  Bounds disk growth of ~/.context-dna/autopilot-logs/ by deleting cycle dirs
+  older than 30 days (default policy). Runs once daily at 04:30 local, at
+  low priority (Nice 10, LowPriorityIO).
+
+  TO INSTALL:
+    1. Copy this file to ~/Library/LaunchAgents/com.localautopilot.prune.plist
+    2. Replace `__REPO_DIR__` with your repo path
+    3. Replace `__USER__` with your username
+    4. Load it:
+         launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.localautopilot.prune.plist
+
+  Or via helper:
+    bash scripts/install-daemon-macos.sh --install-prune
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.localautopilot.prune</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO_DIR__/scripts/prune-old-cycles.sh</string>
+    <string>--keep-days</string>
+    <string>30</string>
+    <string>--keep-failed</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_DIR__</string>
+
+  <!-- Run daily at 04:30 local. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <!-- Be polite: low CPU + IO priority. -->
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/prune.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/prune.err</string>
+</dict>
+</plist>
