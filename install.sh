@@ -58,10 +58,15 @@ else
     log "venv exists at $VENV (skipping creation)"
 fi
 
-# --- 3. Install requirements --------------------------------------------------
+# --- 3. Install requirements + the project itself ----------------------------
+# `pip install -e .` registers the `autopilot`, `autopilot-runner`, and
+# `autopilot-rerank` console_scripts under .venv/bin/ so the daily-use
+# commands in the README work verbatim.
 log "installing requirements.txt"
 "$VENV/bin/pip" install --quiet --upgrade pip
-"$VENV/bin/pip" install --quiet -r requirements.txt || die "pip install failed" 2
+"$VENV/bin/pip" install --quiet -r requirements.txt || die "pip install (deps) failed" 2
+log "installing local_autopilot package (editable)"
+"$VENV/bin/pip" install --quiet -e . || die "pip install -e . failed" 2
 
 # --- 4. Initialise ~/.context-dna -------------------------------------------
 mkdir -p "$CONTEXT_DNA_DIR" || die "cannot create $CONTEXT_DNA_DIR" 3

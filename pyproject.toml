@@ -26,8 +26,9 @@ autopilot = "local_autopilot.tools.autopilot_cli:main"
 # The runner is also exposed as a script for daemon templates that prefer
 # absolute paths over `python -m`.
 autopilot-runner = "local_autopilot.tools.archloop_runner:main"
-# The re-ranker.
-autopilot-rerank = "scripts.rerank_complexity_vectors:main"
+# The complexity-vector re-ranker is shipped as a plain script under
+# scripts/. It's not packaged because it's not part of the library API;
+# invoke it directly: `python3 scripts/rerank_complexity_vectors.py`.
 
 [tool.setuptools]
 package-dir = { "" = "." }
