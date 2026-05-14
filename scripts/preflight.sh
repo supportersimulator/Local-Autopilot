@@ -148,7 +148,7 @@ fi
 
 # ── 7. Daemon ───────────────────────────────────────────────────────────────
 if [ "$(uname -s)" = "Darwin" ]; then
-    if launchctl list 2>/dev/null | grep -q com.localautopilot.tick; then
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.tick"* ]]; then
         _check "launchd timer" ok "com.localautopilot.tick loaded"
     else
         _check "launchd timer" warn "not installed — run 'bash scripts/install-daemon-macos.sh'"

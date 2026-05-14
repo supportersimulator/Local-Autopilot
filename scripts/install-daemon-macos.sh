@@ -64,7 +64,7 @@ if $DRY_RUN; then
 fi
 
 # Unload existing (idempotent)
-if launchctl list 2>/dev/null | grep -q com.localautopilot.tick; then
+if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.tick"* ]]; then
     launchctl bootout "gui/$(id -u)" "$TICK_PLIST" 2>/dev/null || true
 fi
 
@@ -72,15 +72,22 @@ cp "$TICK_TMP" "$TICK_PLIST"
 chmod 644 "$TICK_PLIST"
 rm "$TICK_TMP"
 
-# Load
-if launchctl bootstrap "gui/$(id -u)" "$TICK_PLIST" 2>&1 | tee /tmp/launchctl-install.log; then
-    if launchctl list 2>/dev/null | grep -q com.localautopilot.tick; then
-        _ok "tick timer loaded (every ${INTERVAL}s)"
-    else
-        _fail "launchctl bootstrap returned ok but service not listed — check /tmp/launchctl-install.log"
+# Load — verify by list, not bootstrap exit code.
+# macOS launchctl can return "Input/output error" (exit 5) on re-bootstrap even
+# when the service successfully (re)loads. Source of truth = launchctl list.
+# Registration is also async — retry the list check briefly.
+launchctl bootstrap "gui/$(id -u)" "$TICK_PLIST" >/tmp/launchctl-install.log 2>&1 || true
+_loaded=false
+for _i in 1 2 3 4 5; do
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.tick"* ]]; then
+        _loaded=true; break
     fi
+    sleep 1
+done
+if $_loaded; then
+    _ok "tick timer loaded (every ${INTERVAL}s)"
 else
-    _fail "launchctl bootstrap failed — check /tmp/launchctl-install.log"
+    _fail "service not loaded after bootstrap (waited 5s) — check /tmp/launchctl-install.log"
 fi
 
 # Optionally install the rerank job
@@ -97,7 +104,8 @@ if $INSTALL_RERANK && [ -f "$REPO_DIR/daemons/autopilot-rerank.plist.template" ]
     cp "$RERANK_TMP" "$RERANK_PLIST"
     chmod 644 "$RERANK_PLIST"
     rm "$RERANK_TMP"
-    if launchctl bootstrap "gui/$(id -u)" "$RERANK_PLIST" 2>/dev/null; then
+    launchctl bootstrap "gui/$(id -u)" "$RERANK_PLIST" 2>/dev/null || true
+    if [[ "$(launchctl list 2>/dev/null)" == *"com.localautopilot.rerank"* ]]; then
         _ok "rerank job loaded (daily)"
     else
         echo "[install-daemon] WARN: rerank plist install failed (non-fatal)"
