@@ -8,6 +8,7 @@
 # Usage:
 #   bash scripts/install-daemon-linux.sh                  # default 30 min tick
 #   bash scripts/install-daemon-linux.sh --interval 30m   # custom (systemd format)
+#   bash scripts/install-daemon-linux.sh --headless-executor  # opt-in: Atlas invokes `claude --print` per cycle
 #   bash scripts/install-daemon-linux.sh --dry-run        # print what would happen
 #
 # Uninstall:  bash scripts/uninstall-daemon-linux.sh
@@ -17,12 +18,20 @@ set -uo pipefail
 
 INTERVAL="30min"
 DRY_RUN=false
+HEADLESS_EXECUTOR=false
 for arg in "$@"; do
     case "$arg" in
         --interval) shift; INTERVAL="$1"; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --headless-executor) HEADLESS_EXECUTOR=true; shift ;;
     esac
 done
+
+if $HEADLESS_EXECUTOR; then
+    echo ""
+    echo "  WARNING: Headless executor enabled — Atlas will invoke \`claude --print\` on every cycle prompt without human review. Audit cycle artifacts under ~/.context-dna/autopilot-logs/cycle-* regularly."
+    echo ""
+fi
 
 [ "$(uname -s)" = "Linux" ] || { echo "Linux only"; exit 2; }
 command -v systemctl >/dev/null || { echo "systemctl not found"; exit 2; }
@@ -47,6 +56,13 @@ mkdir -p "$USER_UNIT_DIR"
 # Render both units
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__USER__|$USER_NAME|g" \
     "$REPO_DIR/daemons/autopilot-tick.service.template" > "$SERVICE_UNIT.tmp"
+
+# Opt-in: append --headless-executor to the ExecStart line.
+if $HEADLESS_EXECUTOR; then
+    sed -i.bak -e 's|^\(ExecStart=.*archloop_runner.*\)$|\1 --headless-executor|' "$SERVICE_UNIT.tmp"
+    rm -f "$SERVICE_UNIT.tmp.bak"
+    _info "headless executor flag appended to ExecStart"
+fi
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__USER__|$USER_NAME|g" -e "s|OnUnitActiveSec=.*|OnUnitActiveSec=$INTERVAL|" \
     "$REPO_DIR/daemons/autopilot-tick.timer.template" > "$TIMER_UNIT.tmp"
 

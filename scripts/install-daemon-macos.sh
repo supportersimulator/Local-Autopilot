@@ -9,6 +9,7 @@
 #   bash scripts/install-daemon-macos.sh                    # default 30 min tick
 #   bash scripts/install-daemon-macos.sh --interval 1800    # custom interval (seconds)
 #   bash scripts/install-daemon-macos.sh --also-rerank      # also install the daily rerank job
+#   bash scripts/install-daemon-macos.sh --headless-executor # opt-in: Atlas invokes `claude --print` per cycle
 #   bash scripts/install-daemon-macos.sh --dry-run          # print what would happen
 #
 # Uninstall:   bash scripts/uninstall-daemon-macos.sh
@@ -20,14 +21,22 @@ INTERVAL=1800
 INSTALL_RERANK=false
 INSTALL_PRUNE=false
 DRY_RUN=false
+HEADLESS_EXECUTOR=false
 for arg in "$@"; do
     case "$arg" in
         --interval) shift; INTERVAL="$1"; shift ;;
         --also-rerank) INSTALL_RERANK=true; shift ;;
         --install-prune) INSTALL_PRUNE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
+        --headless-executor) HEADLESS_EXECUTOR=true; shift ;;
     esac
 done
+
+if $HEADLESS_EXECUTOR; then
+    echo ""
+    echo "  WARNING: Headless executor enabled — Atlas will invoke \`claude --print\` on every cycle prompt without human review. Audit cycle artifacts under ~/.context-dna/autopilot-logs/cycle-* regularly."
+    echo ""
+fi
 
 [ "$(uname -s)" = "Darwin" ] || { echo "[install-daemon] this script is for macOS only"; exit 2; }
 
@@ -56,9 +65,25 @@ sed \
     -e "s|<integer>1800</integer>|<integer>$INTERVAL</integer>|" \
     "$REPO_DIR/daemons/autopilot-tick.plist.template" > "$TICK_TMP"
 
+# Inject --headless-executor into ProgramArguments when opt-in flag is set.
+# Insert immediately before the closing </array> following the last <string>5.00</string>.
+if $HEADLESS_EXECUTOR; then
+    HE_TMP="$(mktemp)"
+    awk '
+        BEGIN { injected = 0 }
+        /<\/array>/ && injected == 0 {
+            print "    <string>--headless-executor</string>"
+            injected = 1
+        }
+        { print }
+    ' "$TICK_TMP" > "$HE_TMP"
+    mv "$HE_TMP" "$TICK_TMP"
+    _info "headless executor flag injected into ProgramArguments"
+fi
+
 if $DRY_RUN; then
     _info "DRY-RUN — would write $TICK_PLIST:"
-    sed -n '1,5p;/__/p' "$TICK_TMP"
+    cat "$TICK_TMP"
     rm "$TICK_TMP"
     exit 0
 fi

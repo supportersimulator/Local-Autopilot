@@ -23,6 +23,8 @@ Local Autopilot is a **single-process autonomous loop** that drives AI coding se
 
 It runs as a launchd / systemd timer, ticks every 30 minutes (configurable), and **respects an explicit state machine** — you (and only you) control whether autopilot is on, off, or temporarily elevated.
 
+> **Full autonomy (opt-in):** by default cycles stop at AWAIT for your review. To let Atlas execute prompts itself via `claude --print`, see [BOOTSTRAP.md → Optional: full autonomy via headless executor](BOOTSTRAP.md#optional-full-autonomy-via-headless-executor).
+
 ---
 
 ## Why?

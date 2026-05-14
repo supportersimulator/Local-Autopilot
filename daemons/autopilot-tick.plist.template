@@ -22,6 +22,29 @@
   itself respects the autopilot state machine — if mode == "off" it exits
   immediately. Safe to leave loaded permanently; toggle activity via
   `autopilot on` / `autopilot off`.
+
+  ──────────────────────────────────────────────────────────────────────────
+  OPTIONAL: HEADLESS EXECUTOR (opt-in via installer, NOT baked into this template)
+  ──────────────────────────────────────────────────────────────────────────
+  By default, the runner emits agent prompts and stops at AWAIT — you (the
+  human) read the proposed action and decide whether to run it. This is the
+  safe default and is what this template renders.
+
+  If you add `--headless-executor` to the ProgramArguments array, Atlas will
+  invoke `claude --print` on every cycle prompt and execute the agent
+  without your review. That trades safety for full autonomy:
+    + bigger trust delegation (Atlas decides AND does)
+    + faster turnaround (no human-in-the-loop wait)
+    - no human checkpoint per cycle
+    - cost + side-effects bounded only by the per-agent budget / timeout /
+      `--bare` rails inside the runner
+    - cycle artifacts under ~/.context-dna/autopilot-logs/cycle-* are now
+      your sole audit trail — REVIEW THEM REGULARLY.
+
+  DO NOT edit this template to add the flag. Instead, opt in via the
+  installer so the choice is visible in shell history and reversible:
+      bash scripts/install-daemon-macos.sh --headless-executor
+  Revert by re-running the installer without the flag, or `autopilot off`.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
