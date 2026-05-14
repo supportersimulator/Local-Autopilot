@@ -186,6 +186,73 @@ Or use Ollama / LM Studio (just point `LOCAL_LLM_URL` at their OpenAI-compatible
 
 ---
 
+## Example cycle output
+
+A dry-run cycle prints two JSON event lines and writes a full artefact directory.
+
+```bash
+$ .venv/bin/python3 -m local_autopilot.tools.archloop_runner --dry-run --cycles 1
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/Users/you/.context-dna/autopilot-logs/cycle-20260514T170704Z", "satisfied": true, "verdict": "SIGN-OFF", "aborted": null, "cost_usd_total": 1.35, "watch": false}
+{"event": "exit", "reason": "satisfied", "cycle": 1}
+```
+
+The cycle directory contains every artefact produced by the loop:
+
+```text
+RUN_NOW.signal       cross_exam.txt        manifest.json
+agent_1.prompt       cycle_summary.json    prompts.json
+agent_1.result       deep_exploration.json synaptic_re_eval.md
+agent_2.prompt ...   live_state.json       synaptic_review.md
+```
+
+`cycle_summary.json` (first 30 lines) — stage timings, verdict, and cost:
+
+```json
+{
+  "cycle": 1,
+  "cycle_dir": ".../cycle-20260514T170704Z",
+  "stage_timings": {
+    "PULL_LIVE_STATE": 0.015,
+    "SYNAPTIC_REVIEW": 0.0,
+    "PARSE_PROMPTS": 0.0,
+    "DEEP_EXPLORATION": 0.001,
+    "SPAWN_AGENTS": 0.002,
+    "AWAIT_AGENT_RESULTS": 0.001,
+    "CROSS_EXAM": 0.0,
+    "SYNAPTIC_RE_EVAL": 0.0,
+    "DECISION": 0.0
+  },
+  "stages": [
+    "PULL_LIVE_STATE", "SYNAPTIC_REVIEW", "PARSE_PROMPTS",
+    "DEEP_EXPLORATION", "SPAWN_AGENTS", "AWAIT_AGENT_RESULTS",
+    "CROSS_EXAM", "SYNAPTIC_RE_EVAL", "DECISION"
+  ],
+  "satisfied": true,
+  "verdict_decision": "SIGN-OFF",
+  "cost_usd_cycle": 1.35,
+  "cost_usd_total_after_cycle": 1.35,
+  "agents": {
+```
+
+Every spawned agent receives the same non-destructive contract preamble (`agent_1.prompt`, first 5 lines):
+
+```text
+AUTOPILOT NON-DESTRUCTIVE CONTRACT (read first):
+  * Do NOT commit, push, force-push, or amend.
+  * Do NOT run `rm -rf`, `git reset --hard`, or any destructive shell op.
+  * Do NOT restart, kill, or stop system services (daemons, NATS, MLX).
+  * Investigation, dry-runs, and read-only verification ONLY.
+```
+
+**Run it yourself:**
+
+```bash
+.venv/bin/python3 -m local_autopilot.tools.archloop_runner --dry-run --cycles 1
+ls ~/.context-dna/autopilot-logs/cycle-*/   # newest cycle dir
+```
+
+---
+
 ## Integration with the ContextDNA ecosystem
 
 Local Autopilot is **a tool**, not a platform. It composes:
