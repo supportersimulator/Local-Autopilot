@@ -145,16 +145,48 @@ curl -sf http://127.0.0.1:5044/v1/models | python3 -m json.tool
 5. **Remove 3-Surgeons conftest `HAS_F1=False` bypass** so invariance tests run against the real module (per the Local-Autopilot invariant-#3 fix earlier today).
 6. **Embedding model** — add `Qwen3-Embedding-4B-mxfp8` (4 GB) on a third port if you want local RAG for the autopilot's "live state" payload. A3 flagged this as worth doing.
 
-## Live benchmark (partial)
+## Live benchmark — POST-UPGRADE
 
-Real numbers captured today on this Mac:
+**Cutover completed at 2026-05-14T~19:30 UTC.** Qwen3.6-35B-A3B-4bit-DWQ is now serving on `:5044`. Old Qwen3-4B-4bit retired. Download took 35 minutes (~19 GB).
 
-| Model | Prompt | Tokens | Seconds | Tok/sec | Response |
-|-------|--------|--------|---------|---------|----------|
-| Qwen3-4B-4bit (`:5044`) | trains 200km / 60+80km/h | 16 | 11 | 1.5 | "The two trains meet after 1.5 hours." ✓ correct |
-| Qwen3-30B-A3B-4bit (`:5045`) | same prompt | — | — | — | server up, model downloading (1.1/17 GB at time of audit) |
+| Model | Prompt | Tokens | Seconds | Tok/sec |
+|-------|--------|--------|---------|---------|
+| Qwen3-4B-4bit (baseline, retired) | trains math | 16 | 11 | **1.5** |
+| **Qwen3.6-35B-A3B-4bit-DWQ** | trains math | 80 | 4 | **20** |
+| **Qwen3.6-35B-A3B-4bit-DWQ** | Python fibonacci memoized | 200 | 4 | **50** |
+| **Qwen3.6-35B-A3B-4bit-DWQ** | 3-Surgeons Neurologist role | 200 | 5 | **40** |
 
-The 30B benchmark will be appended in a follow-up commit when the download completes (~30 min from now).
+**Speedup: 13-33× tok/sec** AND a model with 9× active params and a full generation newer. Far exceeded A3's predicted 22-35 tok/sec band — actually clocked 20-50 on this Mac.
+
+**RAM**: 19.74 GB resident for Qwen3.6 (out of 64 GB total). ~1.7 GB free pages currently, plus macOS dynamic cache. Comfortable headroom.
+
+**Note**: `/no_think` directive is NOT recognized by Qwen3.6 (it generates a "thinking process" preamble before the answer). This is cosmetic — the autopilot captures full response anyway — but worth knowing for prompt design.
+
+## Cutover summary
+
+Steps executed (in order):
+1. ✅ Started Qwen3.6-35B-A3B-4bit-DWQ download in background on `:5045` (35 min, ~19 GB)
+2. ✅ `sed` updated `MLX_MODEL` in 4 config locations:
+   - `~/dev/er-simulator-superrepo/scripts/warm-mlx-on-boot.sh`
+   - `~/.3surgeons/config.yaml`
+   - `~/dev/local-autopilot/config.yaml`
+   - `~/dev/er-simulator-superrepo/memory/llm_priority_queue.py`
+3. ✅ Cleaned up half-downloaded `Qwen3-30B-A3B-4bit` cache (recovered ~10 GB disk)
+4. ✅ Stopped test server on `:5045`
+5. ⚠️ `launchctl bootout/bootstrap` of `io.contextdna.mlx-warm` failed with `Bootstrap failed: 5: Input/output error` (transient — known macOS launchd issue when there's a stale entry). Worked around by running `warm-mlx-on-boot.sh` manually; it picked up the new env-var default.
+6. ✅ Qwen3.6 now on `:5044`, autopilot `on_permanent` still active, preflight all-green.
+
+## Follow-ups remaining
+
+Same list as before, with one addition:
+
+7. **launchd bootout/bootstrap I/O error** — happened during this cutover. The plist + script worked; only `launchctl` failed. Probably a quirk with KeepAlive=true on a script that exec's into a Python process. Investigate next time; current manual launch is functional.
+
+Commits in the upgrade chain:
+- `ba5fdcd` — 5-agent gap analysis (this doc, original)
+- `84d208a` — local-autopilot `config.yaml` → Qwen3.6
+- `7b7cd229d` (superrepo) — `warm-mlx-on-boot.sh` + `memory/llm_priority_queue.py` → Qwen3.6
+- (next commit) — this benchmark append
 
 ---
 
