@@ -81,6 +81,13 @@ from deep_exploration import (  # noqa: E402
     DeepExplorationSummary,
     run_deep_exploration_stage,
 )
+try:  # ZSF — headless executor is optional
+    from local_autopilot.tools import headless_executor as _headless_executor  # noqa: E402
+except Exception:  # noqa: BLE001
+    try:
+        import headless_executor as _headless_executor  # noqa: E402
+    except Exception:  # noqa: BLE001
+        _headless_executor = None
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +281,11 @@ COUNTER_KEYS = (
     "deep_exploration_errors",
     "deep_exploration_cost_total",
     "deep_exploration_timeouts",
+    # Headless executor (opt-in via --headless-executor)
+    "cycles_used_headless_executor",
+    "headless_executor_cli_missing",
+    "headless_executor_budget_refused",
+    "headless_executor_errors",
 )
 
 
@@ -553,6 +565,10 @@ def run_cycle(
     dry_run: bool = False,
     log_root: Optional[Path] = None,
     force_complexity: Optional[str] = None,
+    headless_executor: bool = False,
+    headless_budget_per_agent_usd: float = 0.20,
+    headless_timeout_per_agent_s: int = 240,
+    headless_parallel: int = 5,
 ) -> CycleResult:
     """Execute one cycle of the arch-loop, returning a CycleResult."""
     if log_root is None:
@@ -718,6 +734,76 @@ def run_cycle(
         _bump(counters, "cycles_aborted_cost", note=f"cost={cost_so_far:.2f}")
         return result
 
+    # --- Stage 4.5: HEADLESS_EXECUTOR (opt-in) ---
+    # When enabled, fulfill the agent prompts in-process by invoking the
+    # `claude` CLI for each one. This writes agent_N.result + RESULTS_READY.signal
+    # so the subsequent AWAIT poll succeeds immediately, removing the
+    # dependency on a human Claude Code session.
+    if headless_executor and not dry_run:
+        # Safety: refuse if running all agents at full budget could exceed cap.
+        projected = headless_parallel * headless_budget_per_agent_usd
+        if cost_so_far + projected > cost_cap:
+            _bump(
+                counters, "headless_executor_budget_refused",
+                note=(f"projected={projected:.2f} "
+                      f"cost_so_far={cost_so_far:.2f} cap={cost_cap:.2f}"),
+            )
+            print(json.dumps({
+                "event": "headless_executor_skipped",
+                "cycle": cycle_idx,
+                "reason": "budget_would_exceed_cost_cap",
+                "projected_usd": round(projected, 4),
+                "cost_so_far": round(cost_so_far, 4),
+                "cost_cap": cost_cap,
+            }))
+        elif _headless_executor is None:
+            _bump(counters, "headless_executor_errors", note="module not importable")
+            print(json.dumps({
+                "event": "headless_executor_skipped",
+                "cycle": cycle_idx,
+                "reason": "module_unavailable",
+            }))
+        else:
+            ok, detail = _headless_executor.probe_claude_cli()
+            if not ok:
+                _bump(counters, "headless_executor_cli_missing", note=detail[:200])
+                print(json.dumps({
+                    "event": "headless_executor_skipped",
+                    "cycle": cycle_idx,
+                    "reason": "claude_cli_unavailable",
+                    "detail": detail,
+                }))
+            else:
+                with _stage(timings, "HEADLESS_EXECUTOR"):
+                    try:
+                        summary = _headless_executor.execute_cycle(
+                            cycle_dir,
+                            max_budget_per_agent_usd=headless_budget_per_agent_usd,
+                            timeout_per_agent_s=headless_timeout_per_agent_s,
+                            parallel=headless_parallel,
+                        )
+                        _bump(counters, "cycles_used_headless_executor")
+                        evt = {
+                            "event": "headless_executor_done",
+                            "cycle": cycle_idx,
+                            "executed": summary.get("executed", 0),
+                            "passed": summary.get("passed", 0),
+                            "failed": summary.get("failed", 0),
+                            "skipped": summary.get("skipped", 0),
+                            "timeout": summary.get("timeout", 0),
+                            "error": summary.get("error", 0),
+                            "duration_s": summary.get("duration_s", 0.0),
+                        }
+                        print(json.dumps(evt))
+                    except Exception as exc:  # noqa: BLE001 — ZSF
+                        _bump(counters, "headless_executor_errors",
+                              note=f"execute_cycle:{exc}")
+                        print(json.dumps({
+                            "event": "headless_executor_error",
+                            "cycle": cycle_idx,
+                            "error": str(exc),
+                        }))
+
     # --- Stage 5: AWAIT_AGENT_RESULTS ---
     with _stage(timings, "AWAIT_AGENT_RESULTS"):
         if dry_run:
@@ -881,6 +967,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             "manual override when Aaron knows the cycle deserves the deep loop."
         ),
     )
+    parser.add_argument(
+        "--headless-executor", action="store_true",
+        help=(
+            "Opt-in: after writing agent prompts, invoke the `claude` CLI "
+            "in-process to fulfill them so cycles complete without a "
+            "monitoring Claude Code session."
+        ),
+    )
+    parser.add_argument(
+        "--headless-budget-per-agent-usd", type=float, default=0.20,
+        help="Max per-agent claude API budget when --headless-executor (default $0.20).",
+    )
+    parser.add_argument(
+        "--headless-timeout-per-agent-s", type=int, default=240,
+        help="Per-agent wall-clock timeout in seconds (default 240).",
+    )
     args = parser.parse_args(argv)
 
     # Watch mode is mutually exclusive with --cycles N>1.
@@ -903,6 +1005,27 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 2
 
     counters = _ensure_counter_keys(_read_counters())
+
+    # Startup probe: warn (but don't crash) if --headless-executor was set but
+    # the `claude` CLI isn't usable. Per-cycle code will fall back to the
+    # disk-based wait path automatically.
+    if args.headless_executor:
+        if _headless_executor is None:
+            _bump(counters, "headless_executor_errors", note="module unavailable at startup")
+            print(json.dumps({
+                "event": "headless_executor_startup_warning",
+                "reason": "module_unavailable",
+            }))
+        else:
+            ok, detail = _headless_executor.probe_claude_cli()
+            if not ok:
+                _bump(counters, "headless_executor_cli_missing", note=detail[:200])
+                print(json.dumps({
+                    "event": "headless_executor_startup_warning",
+                    "reason": "claude_cli_unavailable",
+                    "detail": detail,
+                }))
+
     mode = _read_autopilot_mode()
     progress = _read_progress()
 
@@ -1048,6 +1171,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             )
             if args.force_complexity:
                 run_kwargs["force_complexity"] = args.force_complexity
+            if args.headless_executor:
+                run_kwargs["headless_executor"] = True
+                run_kwargs["headless_budget_per_agent_usd"] = (
+                    args.headless_budget_per_agent_usd
+                )
+                run_kwargs["headless_timeout_per_agent_s"] = (
+                    args.headless_timeout_per_agent_s
+                )
             result = run_cycle(cycle_idx, **run_kwargs)
             cost_so_far += result.cost_usd
             last_result = result
