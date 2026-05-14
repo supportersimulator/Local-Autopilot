@@ -362,6 +362,187 @@ def test_counters_file_initialised_with_all_keys(isolate_paths):
         assert k in c, f"missing counter key: {k}"
 
 
+def test_watch_mode_runs_two_cycles_then_kill_file(isolate_paths, monkeypatch):
+    """Watch mode runs cycles indefinitely; after 2 cycles we drop a kill
+    file which should cause a clean exit at the next iteration boundary.
+
+    Also exercises the mid-loop state-flip path by NOT using --dry-run
+    (we hijack run_cycle to remain cheap, calling real_run with dry_run=True)
+    — but to avoid the initial mode==off short-circuit we pre-write state."""
+    real_run = archloop_runner.run_cycle
+    isolate_paths.state_file.write_text(json.dumps({
+        "mode": "on_permanent",
+        "set_by": "user",
+        "set_at": "2026-01-01T00:00:00Z",
+    }))
+
+    calls = {"n": 0}
+
+    def hijacked(cycle_idx, *, counters, cost_so_far, cost_cap, dry_run,
+                 log_root=None, force_complexity=None):
+        calls["n"] += 1
+        # Always run the underlying cycle as dry-run so no LLM is called.
+        r = real_run(
+            cycle_idx,
+            counters=counters,
+            cost_so_far=cost_so_far,
+            cost_cap=cost_cap,
+            dry_run=True,
+            log_root=log_root,
+        )
+        r.satisfied = False  # force watch to keep looping
+        if cycle_idx >= 2:
+            isolate_paths.kill.write_text("")  # trigger kill-file exit
+        return r
+
+    monkeypatch.setattr(archloop_runner, "run_cycle", hijacked)
+
+    rc = archloop_runner.main([
+        "--watch",
+        "--watch-interval", "0",
+        "--cost-cap-usd", "100.0",
+        "--max-watch-hours", "1",
+    ])
+    assert rc == 0
+    assert calls["n"] >= 2
+    c = json.loads(isolate_paths.counters.read_text())
+    assert c.get("cycles_aborted_kill_file", 0) >= 1
+
+
+def test_watch_mode_state_flip_to_off_exits(isolate_paths, monkeypatch):
+    """If autopilot_state.json flips to 'off' between cycles, watch mode
+    exits at the next iteration with cycles_aborted_user_off bumped."""
+    real_run = archloop_runner.run_cycle
+    isolate_paths.state_file.write_text(json.dumps({
+        "mode": "on_permanent",
+        "set_by": "user",
+        "set_at": "2026-01-01T00:00:00Z",
+    }))
+
+    calls = {"n": 0}
+
+    def hijacked(cycle_idx, *, counters, cost_so_far, cost_cap, dry_run,
+                 log_root=None, force_complexity=None):
+        calls["n"] += 1
+        r = real_run(
+            cycle_idx,
+            counters=counters,
+            cost_so_far=cost_so_far,
+            cost_cap=cost_cap,
+            dry_run=True,
+            log_root=log_root,
+        )
+        r.satisfied = False
+        if cycle_idx >= 2:
+            isolate_paths.state_file.write_text(json.dumps({
+                "mode": "off",
+                "set_by": "user",
+                "set_at": "2026-01-01T00:00:00Z",
+            }))
+            # F1 caches paths at module level — re-point to our tmp file.
+            try:
+                import autopilot_state as _as  # type: ignore
+                _as.set_state_paths(isolate_paths.state_file)
+            except Exception:
+                pass
+        return r
+
+    monkeypatch.setattr(archloop_runner, "run_cycle", hijacked)
+
+    rc = archloop_runner.main([
+        "--watch",
+        "--watch-interval", "0",
+        "--cost-cap-usd", "100.0",
+        "--max-watch-hours", "1",
+    ])
+    assert rc == 0
+    assert calls["n"] >= 2
+    c = json.loads(isolate_paths.counters.read_text())
+    assert c.get("cycles_aborted_user_off", 0) >= 1
+
+
+def test_watch_mode_dry_run_signal_exit(isolate_paths, monkeypatch):
+    """Watch mode in dry-run + signal handler triggered after 2 cycles exits
+    cleanly. Verifies SIGINT handling without actually delivering a signal:
+    we flip the stop flag from inside the hijacked run_cycle."""
+    real_run = archloop_runner.run_cycle
+    calls = {"n": 0}
+
+    # We need access to the stop_flag dict that main() creates. Trick: have
+    # the hijacked run_cycle raise KeyboardInterrupt after cycle 2 — Python's
+    # default SIGINT handler raises KI, which our watch handler converts to
+    # stop_flag.requested=True. But our handler is installed via
+    # signal.signal, not directly invoked. Instead, after cycle 2, send
+    # SIGINT to our own process.
+    import os as _os
+    import signal as _signal
+
+    def hijacked(cycle_idx, *, counters, cost_so_far, cost_cap, dry_run,
+                 log_root=None, force_complexity=None):
+        calls["n"] += 1
+        r = real_run(
+            cycle_idx,
+            counters=counters,
+            cost_so_far=cost_so_far,
+            cost_cap=cost_cap,
+            dry_run=dry_run,
+            log_root=log_root,
+        )
+        # Force satisfied=False so watch keeps looping.
+        r.satisfied = False
+        if cycle_idx >= 2:
+            _os.kill(_os.getpid(), _signal.SIGINT)
+        return r
+
+    monkeypatch.setattr(archloop_runner, "run_cycle", hijacked)
+
+    rc = archloop_runner.main([
+        "--watch", "--dry-run",
+        "--watch-interval", "0",
+        "--cost-cap-usd", "100.0",
+        "--max-watch-hours", "1",
+    ])
+    assert rc == 0
+    assert calls["n"] >= 2
+
+
+def test_watch_mode_cost_cap_exits_with_code_6(isolate_paths, monkeypatch):
+    """Cost cap reached in watch mode → exit code 6 (not 0)."""
+    real_run = archloop_runner.run_cycle
+
+    def hijacked(cycle_idx, *, counters, cost_so_far, cost_cap, dry_run,
+                 log_root=None, force_complexity=None):
+        r = real_run(
+            cycle_idx,
+            counters=counters,
+            cost_so_far=cost_so_far,
+            cost_cap=cost_cap,
+            dry_run=dry_run,
+            log_root=log_root,
+        )
+        r.satisfied = False
+        r.cost_usd = max(r.cost_usd, 0.60)
+        return r
+
+    monkeypatch.setattr(archloop_runner, "run_cycle", hijacked)
+
+    rc = archloop_runner.main([
+        "--watch", "--dry-run",
+        "--watch-interval", "0",
+        "--cost-cap-usd", "1.00",
+        "--max-watch-hours", "1",
+    ])
+    assert rc == 6
+
+
+def test_watch_mode_rejects_explicit_cycles_arg(isolate_paths):
+    """--watch with explicit --cycles N>1 → exit 2."""
+    rc = archloop_runner.main([
+        "--watch", "--cycles", "5", "--dry-run",
+    ])
+    assert rc == 2
+
+
 def test_synaptic_parse_errors_increment_counter(isolate_paths, monkeypatch):
     """Parser failure path must bump synaptic_parse_errors."""
     # Force the parser to see garbage by stubbing _call_llm directly.

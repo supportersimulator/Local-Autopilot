@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -831,6 +832,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="No LLM, no 3s, no real spawns — just exercise the state machine.",
     )
     parser.add_argument(
+        "--watch", action="store_true",
+        help="Run cycles indefinitely until SIGINT/SIGTERM. Mutually exclusive with --cycles N>1.",
+    )
+    parser.add_argument(
+        "--watch-interval", type=int,
+        default=int(os.environ.get("AUTOPILOT_WATCH_INTERVAL_S", "1800")),
+        help="Seconds to sleep between cycles after SIGN-OFF (default 1800).",
+    )
+    parser.add_argument(
+        "--max-watch-hours", type=float,
+        default=float(os.environ.get("AUTOPILOT_MAX_WATCH_HOURS", "24")),
+        help="Hard exit after N hours in watch mode (default 24).",
+    )
+    parser.add_argument(
         "--force-complexity", type=str, default=None,
         choices=("LOW", "MED", "HIGH", "low", "med", "high"),
         help=(
@@ -840,6 +855,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    # Watch mode is mutually exclusive with --cycles N>1.
+    if args.watch and args.cycles > 1:
+        # --cycles default is 10, so only error if user explicitly bumped it.
+        # We can't easily detect explicit vs default here without sentinels;
+        # accept the watch flag and ignore --cycles in watch mode, except we
+        # error if both watch=True and cycles>1 were ARG-provided. Heuristic:
+        # check argv directly.
+        explicit_cycles = any(
+            a == "--cycles" or a.startswith("--cycles=")
+            for a in (argv if argv is not None else sys.argv[1:])
+        )
+        if explicit_cycles:
+            print(json.dumps({
+                "event": "exit",
+                "reason": "invalid_args",
+                "error": "--watch is mutually exclusive with --cycles N>1",
+            }))
+            return 2
 
     counters = _ensure_counter_keys(_read_counters())
     mode = _read_autopilot_mode()
@@ -857,71 +891,219 @@ def main(argv: Optional[list[str]] = None) -> int:
         }))
         return 0
 
+    # SIGINT/SIGTERM handling for watch mode: set a flag, finish the current
+    # cycle (or break the sleep), then exit cleanly.
+    stop_flag = {"requested": False, "signum": None}
+
+    def _handle_signal(signum, _frame):
+        stop_flag["requested"] = True
+        stop_flag["signum"] = signum
+
+    prev_int = prev_term = None
+    if args.watch:
+        try:
+            prev_int = signal.signal(signal.SIGINT, _handle_signal)
+            prev_term = signal.signal(signal.SIGTERM, _handle_signal)
+        except (ValueError, OSError):
+            # signal.signal only works in main thread; tests may run in
+            # threads. Fall back gracefully — stop_flag just stays False.
+            pass
+
+    def _interruptible_sleep(seconds: float) -> None:
+        """Sleep in small slices so SIGINT/SIGTERM unblocks fast + we can
+        re-check autopilot state / kill file mid-sleep."""
+        slice_s = 1.0
+        elapsed = 0.0
+        while elapsed < seconds:
+            if stop_flag["requested"] or _check_kill():
+                return
+            # Mid-sleep state check — flip to off → break out.
+            if _read_autopilot_mode() == "off" and not args.dry_run:
+                return
+            time.sleep(min(slice_s, seconds - elapsed))
+            elapsed += slice_s
+
     cost_so_far = 0.0
     last_result: Optional[CycleResult] = None
+    watch_start_ts = time.time()
+    cycle_idx = 0
+    exit_rc = 0
 
-    for i in range(1, args.cycles + 1):
-        if _check_kill():
-            _bump(counters, "cycles_aborted_kill_file")
+    try:
+        while True:
+            cycle_idx += 1
+
+            # Watch-mode hard time cap.
+            if args.watch and (
+                time.time() - watch_start_ts
+                >= args.max_watch_hours * 3600.0
+            ):
+                _write_counters(counters)
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "max_watch_hours",
+                    "cycle": cycle_idx,
+                    "hours": round((time.time() - watch_start_ts) / 3600.0, 3),
+                }))
+                return 0
+
+            # Non-watch: respect --cycles N upper bound.
+            if not args.watch and cycle_idx > args.cycles:
+                _bump(counters, "cycles_aborted_cycle_cap")
+                _write_counters(counters)
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "cycle_cap_hit",
+                    "cycles_run": args.cycles,
+                }))
+                return 0
+
+            # Pre-cycle state checks (re-read every iteration — watch mode
+            # must observe state flips to 'off').
+            if args.watch:
+                if stop_flag["requested"]:
+                    print(json.dumps({
+                        "event": "exit",
+                        "reason": "signal",
+                        "signum": stop_flag["signum"],
+                        "cycle": cycle_idx,
+                    }))
+                    return 0
+                live_mode = _read_autopilot_mode()
+                if live_mode == "off" and not args.dry_run:
+                    _bump(counters, "cycles_aborted_user_off")
+                    _write_counters(counters)
+                    print(json.dumps({
+                        "event": "exit",
+                        "reason": "state.mode == 'off'",
+                        "mode": live_mode,
+                        "cycle": cycle_idx,
+                    }))
+                    return 0
+
+            if _check_kill():
+                _bump(counters, "cycles_aborted_kill_file")
+                _write_counters(counters)
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "kill_file",
+                    "cycle": cycle_idx,
+                }))
+                return 0
+
+            if cost_so_far >= args.cost_cap_usd:
+                _bump(counters, "cycles_aborted_cost",
+                      note=f"cost={cost_so_far:.2f}")
+                _write_counters(counters)
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "cost_cap",
+                    "cycle": cycle_idx,
+                    "cost_usd_total": round(cost_so_far, 4),
+                }))
+                # In watch mode, cost-cap → exit code 6 so the supervising
+                # launchd/systemd unit can distinguish "ran out of budget"
+                # from clean exit.
+                return 6 if args.watch else 0
+
+            # Pass force_complexity only when set (test compat — see history).
+            run_kwargs = dict(
+                counters=counters,
+                cost_so_far=cost_so_far,
+                cost_cap=args.cost_cap_usd,
+                dry_run=args.dry_run,
+            )
+            if args.force_complexity:
+                run_kwargs["force_complexity"] = args.force_complexity
+            result = run_cycle(cycle_idx, **run_kwargs)
+            cost_so_far += result.cost_usd
+            last_result = result
+
+            # Persist counters + progress every cycle (ZSF).
             _write_counters(counters)
-            print(json.dumps({"event": "exit", "reason": "kill_file", "cycle": i}))
-            return 0
+            progress.cycle_count += 1
+            progress.last_satisfaction = result.satisfied
+            progress.last_cycle_ts = time.time()
+            _write_progress(progress)
 
-        if cost_so_far >= args.cost_cap_usd:
-            _bump(counters, "cycles_aborted_cost", note=f"cost={cost_so_far:.2f}")
-            _write_counters(counters)
-            print(json.dumps({"event": "exit", "reason": "cost_cap", "cycle": i,
-                              "cost_usd_total": cost_so_far}))
-            return 0
+            cycle_event = {
+                "event": "cycle_done",
+                "cycle": cycle_idx,
+                "cycle_dir": str(result.cycle_dir),
+                "satisfied": result.satisfied,
+                "verdict": result.verdict_decision,
+                "aborted": result.aborted,
+                "cost_usd_total": round(cost_so_far, 4),
+                "watch": bool(args.watch),
+            }
+            print(json.dumps(cycle_event))
 
-        # Pass force_complexity only when set, so downstream test
-        # monkeypatches of run_cycle that don't accept the kwarg keep
-        # working. (Tests in test_archloop.py override run_cycle with a
-        # narrower signature; we don't want to break them.)
-        run_kwargs = dict(
-            counters=counters,
-            cost_so_far=cost_so_far,
-            cost_cap=args.cost_cap_usd,
-            dry_run=args.dry_run,
-        )
-        if args.force_complexity:
-            run_kwargs["force_complexity"] = args.force_complexity
-        result = run_cycle(i, **run_kwargs)
-        cost_so_far += result.cost_usd
-        last_result = result
+            if not args.watch:
+                # Original (non-watch) semantics: abort or satisfied → stop.
+                if result.aborted:
+                    return 0
+                if result.satisfied:
+                    print(json.dumps({
+                        "event": "exit",
+                        "reason": "satisfied",
+                        "cycle": cycle_idx,
+                    }))
+                    return 0
+                continue
 
-        # Persist counters + progress every cycle (ZSF).
-        _write_counters(counters)
-        progress.cycle_count += 1
-        progress.last_satisfaction = result.satisfied
-        progress.last_cycle_ts = time.time()
-        _write_progress(progress)
+            # --- Watch-mode adaptive backoff ---
+            # cost-cap mid-cycle → exit 6 (don't loop into more spend).
+            if result.aborted == "cost_cap":
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "cost_cap",
+                    "cycle": cycle_idx,
+                    "cost_usd_total": round(cost_so_far, 4),
+                }))
+                return 6
 
-        print(json.dumps({
-            "event": "cycle_done",
-            "cycle": i,
-            "cycle_dir": str(result.cycle_dir),
-            "satisfied": result.satisfied,
-            "verdict": result.verdict_decision,
-            "aborted": result.aborted,
-            "cost_usd_total": round(cost_so_far, 4),
-        }))
+            # Honor SIGINT collected during the cycle.
+            if stop_flag["requested"]:
+                print(json.dumps({
+                    "event": "exit",
+                    "reason": "signal",
+                    "signum": stop_flag["signum"],
+                    "cycle": cycle_idx,
+                }))
+                return 0
 
-        if result.aborted:
-            return 0
-        if result.satisfied:
-            # SATISFIED=TRUE → stop loop. (on_temporary expires via F1 — we
-            # don't try to keep looping past satisfaction without an
-            # explicit continuous mode, which F1 doesn't currently expose.)
-            print(json.dumps({"event": "exit", "reason": "satisfied", "cycle": i}))
-            return 0
-    else:
-        _bump(counters, "cycles_aborted_cycle_cap")
-        _write_counters(counters)
-        print(json.dumps({"event": "exit", "reason": "cycle_cap_hit",
-                          "cycles_run": args.cycles}))
+            # Adaptive backoff:
+            #   ABORT (non-cost) → 2× interval (something's wrong)
+            #   SIGN-OFF / satisfied / default → 1× interval
+            if result.aborted:
+                sleep_s = args.watch_interval * 2
+                sleep_reason = f"abort:{result.aborted}"
+            else:
+                sleep_s = args.watch_interval
+                sleep_reason = (
+                    "signoff" if result.verdict_decision == "SIGN-OFF"
+                    else "default"
+                )
 
-    return 0
+            print(json.dumps({
+                "event": "watch_sleep",
+                "cycle": cycle_idx,
+                "sleep_s": sleep_s,
+                "reason": sleep_reason,
+            }))
+            _interruptible_sleep(sleep_s)
+    finally:
+        # Restore signal handlers we installed.
+        if args.watch:
+            try:
+                if prev_int is not None:
+                    signal.signal(signal.SIGINT, prev_int)
+                if prev_term is not None:
+                    signal.signal(signal.SIGTERM, prev_term)
+            except (ValueError, OSError):
+                pass
+
+    return exit_rc
 
 
 if __name__ == "__main__":
