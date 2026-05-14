@@ -186,6 +186,13 @@ def _run_one_agent(
         "Followed by a brief explanation. Use PASS only if you verified the "
         "expected condition. Use SKIP if the task is unsafe, unclear, or "
         "out-of-scope. Use FAIL otherwise.\n\n"
+        "Hint: Superpowers skills (brainstorming, systematic-debugging, "
+        "test-driven-development, verification-before-completion, "
+        "writing-plans, etc.) are available via the Skill tool. Invoke them "
+        "when the task warrants — e.g. systematic-debugging for any bug or "
+        "unexpected behaviour, verification-before-completion before "
+        "claiming PASS, brainstorming for design choices. They are "
+        "discoverable, not mandatory; skip them for trivial checks.\n\n"
         "--- TASK ---\n"
     )
     full_prompt = header + prompt_text
