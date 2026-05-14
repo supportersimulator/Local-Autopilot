@@ -130,15 +130,23 @@ fi
 
 # --- 6. Smoke test ------------------------------------------------------------
 log "running pytest smoke check"
-if "$VENV/bin/python3" -m pytest tests/ -q --no-header 2>&1 | tee /tmp/local-autopilot-install-pytest.log; then
-    PASS_COUNT="$(grep -oE '[0-9]+ passed' /tmp/local-autopilot-install-pytest.log | head -1 | grep -oE '[0-9]+' || echo 0)"
-    if [ "${PASS_COUNT:-0}" -lt 80 ]; then
-        die "pytest smoke check produced only $PASS_COUNT passing tests (need ≥80)" 4
-    fi
-    log "pytest smoke check green ($PASS_COUNT passed)"
-else
-    die "pytest smoke check failed — see /tmp/local-autopilot-install-pytest.log" 4
+# Capture pytest's REAL exit code despite the `tee` pipeline.
+# Without `pipefail`, `cmd | tee` returns tee's exit (always 0) and a
+# failing pytest silently passes the install. That's the bug F's agent
+# misread as a "flaky test" — install was masking real failures.
+set -o pipefail
+"$VENV/bin/python3" -m pytest tests/ -q --no-header 2>&1 | tee /tmp/local-autopilot-install-pytest.log
+PYTEST_RC="${PIPESTATUS[0]}"
+set +o pipefail
+
+PASS_COUNT="$(grep -oE '[0-9]+ passed' /tmp/local-autopilot-install-pytest.log | head -1 | grep -oE '[0-9]+' || echo 0)"
+if [ "$PYTEST_RC" -ne 0 ]; then
+    die "pytest smoke check failed (exit $PYTEST_RC, $PASS_COUNT passed) — see /tmp/local-autopilot-install-pytest.log" 4
 fi
+if [ "${PASS_COUNT:-0}" -lt 80 ]; then
+    die "pytest smoke check produced only $PASS_COUNT passing tests (need ≥80)" 4
+fi
+log "pytest smoke check green ($PASS_COUNT passed)"
 
 # --- 7. Preflight: verify a working LLM provider + runtime deps -------------
 log "running scripts/preflight.sh --quiet"
