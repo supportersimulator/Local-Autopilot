@@ -29,12 +29,14 @@ expands Atlas's authority. Audit cycle artifacts under
 from __future__ import annotations
 
 import concurrent.futures
+import fcntl
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,6 +46,8 @@ logger = logging.getLogger("local_autopilot.headless_executor")
 
 _DATA_DIR = Path(os.environ.get("CONTEXT_DNA_DIR", os.path.expanduser("~/.context-dna")))
 _COUNTERFILE = _DATA_DIR / "headless_executor_counters.json"
+_COUNTER_LOCKFILE = _DATA_DIR / ".headless_executor_counters.lock"
+_counter_thread_lock = threading.Lock()
 
 _DEFAULT_MAX_BUDGET_USD = 0.20  # per-agent claude API call
 _DEFAULT_TIMEOUT_S = 240        # 4 min per agent
@@ -64,21 +68,54 @@ class AgentExecution:
 
 
 def _bump(counter: str, *, delta: int = 1, note: str = "") -> None:
-    """ZSF counter bump — never raises."""
+    """ZSF counter bump — never raises.
+
+    Cross-thread + cross-process safe: holds threading.Lock for intra-process
+    serialization and fcntl.flock for inter-process serialization across the
+    entire read-modify-write sequence. HE-2's test agent caught that the prior
+    implementation lost increments under parallel=5 because the JSON load +
+    increment + write was not atomic.
+    """
+    fd = None
     try:
         _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        data = {}
-        if _COUNTERFILE.exists():
+        with _counter_thread_lock:
+            # Exclusive flock so concurrent processes don't trample each other.
+            fd = os.open(str(_COUNTER_LOCKFILE), os.O_RDWR | os.O_CREAT, 0o600)
             try:
-                data = json.loads(_COUNTERFILE.read_text() or "{}")
-            except (json.JSONDecodeError, OSError):
-                data = {}
-        data[counter] = int(data.get(counter, 0)) + delta
-        if note:
-            data[f"{counter}__last_note"] = note[:200]
-        _COUNTERFILE.write_text(json.dumps(data, indent=2, sort_keys=True))
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except OSError:
+                # Lock unavailable — fall back to best-effort write.
+                # (Better to risk a lost increment than to raise.)
+                pass
+
+            data = {}
+            if _COUNTERFILE.exists():
+                try:
+                    data = json.loads(_COUNTERFILE.read_text() or "{}")
+                except (json.JSONDecodeError, OSError):
+                    data = {}
+            data[counter] = int(data.get(counter, 0)) + delta
+            if note:
+                data[f"{counter}__last_note"] = note[:200]
+
+            # Atomic write: temp file + rename so a crash can't leave a
+            # partial JSON file.
+            tmp = _COUNTERFILE.with_suffix(_COUNTERFILE.suffix + ".tmp")
+            tmp.write_text(json.dumps(data, indent=2, sort_keys=True))
+            tmp.replace(_COUNTERFILE)
     except Exception as e:  # noqa: BLE001 — ZSF
         logger.warning("counter bump failed: %s", e)
+    finally:
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def probe_claude_cli() -> tuple[bool, str]:
