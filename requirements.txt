@@ -1,0 +1,20 @@
+# Local Autopilot — pinned runtime + test dependencies.
+# All versions chosen to match the superrepo Python 3.12 lockfile so behaviour
+# stays identical when imported from either project.
+
+# --- Runtime -----------------------------------------------------------------
+# HTTP client used by the LLM priority shim to hit MLX / DeepSeek / OpenAI.
+requests==2.34.1
+
+# YAML config parser for ~/.config/local-autopilot/config.yaml.
+PyYAML==6.0.2
+
+# --- 3-Surgeons consensus toolkit -------------------------------------------
+# Vendored as a sibling install. Pulls in the 3s CLI (`3s ...`) that
+# scripts/3s-brainstorm.sh and deep_exploration.py both subprocess into.
+# Install separately if you want to wire your own keys:
+#   pip install -e <path-to-3-surgeons-clone>
+# We don't pin it here so users can swap to a fork easily.
+
+# --- Testing -----------------------------------------------------------------
+pytest==9.0.3

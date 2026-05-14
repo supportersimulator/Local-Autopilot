@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local Autopilot — complexity-vector re-ranker (macOS launchd).
+
+  Periodically recomputes `drift_ranking_score` so the autopilot ranks live
+  drift rather than the static seed values.
+
+  TO INSTALL:
+    1. Copy this file to ~/Library/LaunchAgents/local-autopilot-rerank.plist
+    2. Replace `__REPO_DIR__` with your repo path
+    3. Replace `__USER__` with your username
+    4. Optional: change StartInterval (default 21600 = 6h)
+    5. Load it:
+         launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local-autopilot-rerank.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.localautopilot.rerank</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_DIR__/.venv/bin/python3</string>
+    <string>__REPO_DIR__/scripts/rerank_complexity_vectors.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_DIR__</string>
+
+  <key>StartInterval</key>
+  <integer>21600</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/rerank.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/rerank.err</string>
+</dict>
+</plist>

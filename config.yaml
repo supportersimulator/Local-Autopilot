@@ -1,0 +1,73 @@
+# Local Autopilot — default config. Copy to ~/.config/local-autopilot/config.yaml
+# to override per-host without editing this file.
+#
+# Every key below maps to an environment variable consumed by the autopilot
+# runner. Setting the env var in your shell takes precedence over this file.
+
+# --- LLM provider chain -------------------------------------------------------
+# Where Synaptic calls go. Options:
+#   local-first                       — try MLX (5044), fall back to DeepSeek + OpenAI
+#   local-only                        — never call HTTPS providers
+#   deepseek-first                    — DeepSeek first, MLX fallback
+#   openai-first                      — OpenAI first, MLX fallback
+#   deepseek                          — DeepSeek only (no fallback)
+#   openai                            — OpenAI only
+#   deepseek-first-openai-fallback    — DeepSeek primary, OpenAI secondary, MLX last
+llm_external_provider: local-first
+
+# MLX server URL. Default matches the superrepo MLX install (Qwen3-4B-4bit).
+mlx_server_url: http://127.0.0.1:5044
+mlx_default_model: mlx-community/Qwen3-4B-4bit
+
+# DeepSeek (set DEEPSEEK_API_KEY in your shell — never check secrets into git).
+deepseek_model: deepseek-chat
+deepseek_base_url: https://api.deepseek.com/v1
+
+# OpenAI (set OPENAI_API_KEY in your shell).
+openai_model: gpt-4o-mini
+openai_base_url: https://api.openai.com/v1
+
+# --- Cycle policy -------------------------------------------------------------
+# Hard cap on cycles per `archloop_runner.py` invocation.
+max_cycles: 10
+# Cumulative cost cap in USD. Heuristic — see SKILL.md "Cost-cap accounting".
+cost_cap_usd: 5.0
+# Per-agent token estimate (drives cost-cap math).
+per_agent_usd: 0.27
+
+# --- Deep exploration (G1) ---------------------------------------------------
+# Risk-score floor that promotes a cycle to HIGH complexity.
+deep_risk_threshold: 9.0
+# Drift-ranking floor that promotes a cycle to HIGH complexity.
+deep_drift_threshold: 80.0
+# Cost cap for the inner brainstorm subprocess.
+deep_brainstorm_cost_cap_usd: 0.05
+# Hard timeout for the brainstorm subprocess (the slow limb).
+deep_brainstorm_timeout_s: 600
+# Hard timeout for the 3s counter-position probe.
+deep_counter_timeout_s: 180
+# Hard timeout for the entire deep_exploration stage.
+deep_stage_budget_s: 600
+
+# Trigger keywords scanned against Synaptic's prompt text — case-insensitive.
+# Match any → consider promoting to HIGH (subject to DB corroboration rule).
+trigger_keywords:
+  - architectural
+  - irreversible
+  - schema change
+  - destructive
+  - security
+
+# --- Filesystem paths ---------------------------------------------------------
+# Override only if your home isn't writable or you want test isolation.
+context_dna_dir: ~/.context-dna
+log_root: ~/.context-dna/autopilot-logs
+brainstorm_dir: ~/.context-dna/brainstorm
+
+# --- 3-surgeons CLI -----------------------------------------------------------
+# Absolute path to the `3s` CLI. Install via `pip install three-surgeons` or
+# clone https://github.com/supportersimulator/3-surgeons. Set to "" if you
+# want to run without 3s (deep_exploration will degrade gracefully — counter
+# bumps `deep_exploration_errors` and the cycle falls through to raw Synaptic
+# prompts).
+three_surgeons_cli: /usr/local/bin/3s

@@ -1,0 +1,34 @@
+# Local Autopilot — systemd user unit (Linux).
+#
+# TO INSTALL:
+#   1. Copy this file to ~/.config/systemd/user/local-autopilot-tick.service
+#   2. Replace __REPO_DIR__ with your repo path (e.g. /home/aaron/local-autopilot)
+#   3. Replace __USER__ with your username
+#   4. Also create the timer (see autopilot-tick.timer.template)
+#   5. Enable + start:
+#        systemctl --user daemon-reload
+#        systemctl --user enable --now local-autopilot-tick.timer
+#   6. Tail:
+#        journalctl --user -u local-autopilot-tick.service -f
+#
+# This is a one-shot unit triggered by the .timer companion. The runner
+# respects the autopilot state machine and exits early when mode == "off".
+
+[Unit]
+Description=Local Autopilot tick (Synaptic-driven hardening cycle)
+Documentation=https://github.com/supportersimulator/local-autopilot
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_DIR__
+Environment=PYTHONPATH=__REPO_DIR__:__REPO_DIR__/local_autopilot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=__REPO_DIR__/.venv/bin/python3 -m local_autopilot.tools.archloop_runner --cycles 1 --cost-cap-usd 0.50
+Nice=10
+IOSchedulingClass=idle
+StandardOutput=append:/home/__USER__/.context-dna/autopilot-logs/systemd.out
+StandardError=append:/home/__USER__/.context-dna/autopilot-logs/systemd.err
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,21 @@
+# Local Autopilot — systemd timer companion to autopilot-tick.service.
+#
+# Install + enable:
+#   cp daemons/autopilot-tick.timer.template ~/.config/systemd/user/local-autopilot-tick.timer
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now local-autopilot-tick.timer
+#
+# Tune OnUnitActiveSec to taste (default 30 minutes).
+
+[Unit]
+Description=Local Autopilot — fire a tick every 30 minutes
+Requires=local-autopilot-tick.service
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "local-autopilot"
+version = "0.1.0"
+description = "Synaptic-driven autonomous hardening loop — drop-in single-process build of Aaron's Context DNA autopilot."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Aaron Tjomsland", email = "support@ersimulator.com" }]
+keywords = ["autopilot", "synaptic", "context-dna", "agent-loop"]
+
+dependencies = [
+    "requests>=2.32",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=9.0"]
+
+[project.scripts]
+# Aaron types `autopilot status` / `autopilot on` / `autopilot off`.
+autopilot = "local_autopilot.tools.autopilot_cli:main"
+# The runner is also exposed as a script for daemon templates that prefer
+# absolute paths over `python -m`.
+autopilot-runner = "local_autopilot.tools.archloop_runner:main"
+# The re-ranker.
+autopilot-rerank = "scripts.rerank_complexity_vectors:main"
+
+[tool.setuptools]
+package-dir = { "" = "." }
+
+[tool.setuptools.packages.find]
+include = ["local_autopilot*"]
+exclude = ["tests*", "daemons*", "seeds*", "docs*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+# Note: no asyncio_mode needed — the autopilot loop is pure sync.

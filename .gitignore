@@ -1,0 +1,44 @@
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Virtualenvs -----------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- Build artefacts -------------------------------------------------------
+build/
+dist/
+
+# --- Local Autopilot runtime ----------------------------------------------
+# State + counters live under ~/.context-dna/, never inside the repo. If
+# someone *does* generate them locally for tests, ignore them.
+/tmp/autopilot-*.json
+/tmp/autopilot-*.jsonl
+/tmp/autopilot-*.log
+/tmp/local-autopilot-*.json
+/tmp/local-autopilot-*.log
+.fleet/
+
+# --- IDE -------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS noise --------------------------------------------------------------
+.DS_Store
+
+# --- Secrets ---------------------------------------------------------------
+# Never check in .env or any file matching *.key, *.pem.
+.env
+.env.*
+*.key
+*.pem

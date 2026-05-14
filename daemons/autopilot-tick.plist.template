@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local Autopilot — macOS launchd template.
+
+  TO INSTALL:
+    1. Copy this file to ~/Library/LaunchAgents/local-autopilot-tick.plist
+    2. Replace every `__REPO_DIR__` placeholder with the absolute path to your
+       Local Autopilot clone (e.g. /Users/aarontjomsland/dev/local-autopilot)
+    3. Replace `__USER__` with your macOS username (output of `whoami`)
+    4. Optional: tune `StartInterval` (seconds between ticks; default 1800 = 30 min)
+    5. Load it:
+         launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local-autopilot-tick.plist
+    6. Verify:
+         launchctl list | grep local-autopilot
+         tail -f ~/.context-dna/autopilot-logs/launchd.out
+
+  TO UNINSTALL:
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/local-autopilot-tick.plist
+    rm ~/Library/LaunchAgents/local-autopilot-tick.plist
+
+  The tick runs `archloop_runner.py --cycles 1` every interval. The runner
+  itself respects the autopilot state machine — if mode == "off" it exits
+  immediately. Safe to leave loaded permanently; toggle activity via
+  `autopilot on` / `autopilot off`.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.localautopilot.tick</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__REPO_DIR__/.venv/bin/python3</string>
+    <string>-m</string>
+    <string>local_autopilot.tools.archloop_runner</string>
+    <string>--cycles</string>
+    <string>1</string>
+    <string>--cost-cap-usd</string>
+    <string>0.50</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_DIR__</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin</string>
+    <key>PYTHONPATH</key>
+    <string>__REPO_DIR__:__REPO_DIR__/local_autopilot</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/__USER__/.context-dna/autopilot-logs/launchd.err</string>
+
+  <!-- Be a good citizen: low CPU/IO/memory priority so we never starve
+       interactive work. The runner is bursty but should never spike. -->
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>Nice</key>
+  <integer>10</integer>
+</dict>
+</plist>
