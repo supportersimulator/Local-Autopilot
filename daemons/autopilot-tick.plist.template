@@ -72,7 +72,7 @@
     <string>--cycles</string>
     <string>1</string>
     <string>--cost-cap-usd</string>
-    <string>5.00</string>
+    <string>50.00</string>
   </array>
 
   <key>WorkingDirectory</key>
