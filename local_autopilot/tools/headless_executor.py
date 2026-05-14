@@ -193,13 +193,18 @@ def _run_one_agent(
     args = [
         shutil.which("claude") or "claude",
         "--print",
-        "--bare",
         "--no-session-persistence",
         "--max-budget-usd", f"{max_budget_usd:.2f}",
         "--dangerously-skip-permissions",
         *extra_claude_args,
         full_prompt,
     ]
+    # NOTE: --bare was previously included here for fast startup (skips hooks,
+    # plugins, CLAUDE.md discovery). But --bare also disables OAuth + keychain
+    # auth — Aaron caught this when the e2e test returned "Not logged in" on
+    # every agent. Default path now uses normal auth (OAuth or keychain).
+    # If you want --bare for performance + are using ANTHROPIC_API_KEY env,
+    # pass it via extra_claude_args.
 
     try:
         proc = subprocess.run(
