@@ -34,6 +34,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import autopilot_state as st  # noqa: E402
+import caffeinate  # noqa: E402  — sleep-prevention side-effect on transition
 
 CLI_LOG = Path("/tmp/autopilot-cli.log")
 
@@ -84,10 +85,19 @@ def _do_transition(new_mode: str, actor: str, reason: str, until: Optional[str])
     ok, msg = st.transition(new_mode, actor, reason=reason, temporary_until=until)
     if ok:
         state = st.read_state()
-        print(f"OK: autopilot mode = {state.mode} (by {state.set_by})")
+        # Side effect: caffeinate while on, allow sleep when off.
+        # Failure to manage caffeinate is non-fatal — bumps a counter, never
+        # blocks the state transition that already succeeded.
+        try:
+            caf_changed, caf_detail = caffeinate.sync_with_state(state.mode)
+        except Exception as e:  # noqa: BLE001 — ZSF
+            caf_changed, caf_detail = False, f"hook-error:{e}"
+        caf_note = f"caffeinate={caf_detail}"
+        print(f"OK: autopilot mode = {state.mode} (by {state.set_by})  [{caf_note}]")
         _log_event(
             {
                 "cmd": "transition",
+                "caffeinate": caf_detail,
                 "ok": True,
                 "to": new_mode,
                 "actor": actor,
