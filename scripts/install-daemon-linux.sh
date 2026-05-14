@@ -19,11 +19,13 @@ set -uo pipefail
 INTERVAL="30min"
 DRY_RUN=false
 HEADLESS_EXECUTOR=false
+FLEET_ESCALATE=false
 for arg in "$@"; do
     case "$arg" in
         --interval) shift; INTERVAL="$1"; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --headless-executor) HEADLESS_EXECUTOR=true; shift ;;
+        --fleet-escalate) FLEET_ESCALATE=true; shift ;;
     esac
 done
 
@@ -62,6 +64,11 @@ if $HEADLESS_EXECUTOR; then
     sed -i.bak -e 's|^\(ExecStart=.*archloop_runner.*\)$|\1 --headless-executor|' "$SERVICE_UNIT.tmp"
     rm -f "$SERVICE_UNIT.tmp.bak"
     _info "headless executor flag appended to ExecStart"
+fi
+if $FLEET_ESCALATE; then
+    sed -i.bak -e 's|^\(ExecStart=.*archloop_runner.*\)$|\1 --fleet-escalate|' "$SERVICE_UNIT.tmp"
+    rm -f "$SERVICE_UNIT.tmp.bak"
+    _info "fleet escalate flag appended to ExecStart"
 fi
 sed -e "s|__REPO_DIR__|$REPO_DIR|g" -e "s|__USER__|$USER_NAME|g" -e "s|OnUnitActiveSec=.*|OnUnitActiveSec=$INTERVAL|" \
     "$REPO_DIR/daemons/autopilot-tick.timer.template" > "$TIMER_UNIT.tmp"

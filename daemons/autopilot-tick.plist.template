@@ -45,6 +45,18 @@
   installer so the choice is visible in shell history and reversible:
       bash scripts/install-daemon-macos.sh --headless-executor
   Revert by re-running the installer without the flag, or `autopilot off`.
+
+  ──────────────────────────────────────────────────────────────────────────
+  OPTIONAL: FLEET_ESCALATE (opt-in via installer, NOT baked into this template)
+  ──────────────────────────────────────────────────────────────────────────
+  When all `--cycles` finish without `satisfied=True`, the runner can POST
+  the unresolved cycle to the Multi-Fleet chief node (mac1) at
+  http://127.0.0.1:8855/message so a different vendor LLM with deeper
+  ContextDNA can break the tie or return UNRESOLVABLE.
+
+  Opt in via the installer (do NOT edit this template):
+      bash scripts/install-daemon-macos.sh --fleet-escalate
+  Combine with --headless-executor for fully-autonomous chief-arbitrated runs.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

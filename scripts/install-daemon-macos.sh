@@ -22,6 +22,7 @@ INSTALL_RERANK=false
 INSTALL_PRUNE=false
 DRY_RUN=false
 HEADLESS_EXECUTOR=false
+FLEET_ESCALATE=false
 for arg in "$@"; do
     case "$arg" in
         --interval) shift; INTERVAL="$1"; shift ;;
@@ -29,6 +30,7 @@ for arg in "$@"; do
         --install-prune) INSTALL_PRUNE=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --headless-executor) HEADLESS_EXECUTOR=true; shift ;;
+        --fleet-escalate) FLEET_ESCALATE=true; shift ;;
     esac
 done
 
@@ -79,6 +81,21 @@ if $HEADLESS_EXECUTOR; then
     ' "$TICK_TMP" > "$HE_TMP"
     mv "$HE_TMP" "$TICK_TMP"
     _info "headless executor flag injected into ProgramArguments"
+fi
+
+# Inject --fleet-escalate similarly when opt-in flag is set.
+if $FLEET_ESCALATE; then
+    FE_TMP="$(mktemp)"
+    awk '
+        BEGIN { injected = 0 }
+        /<\/array>/ && injected == 0 {
+            print "    <string>--fleet-escalate</string>"
+            injected = 1
+        }
+        { print }
+    ' "$TICK_TMP" > "$FE_TMP"
+    mv "$FE_TMP" "$TICK_TMP"
+    _info "fleet escalate flag injected into ProgramArguments"
 fi
 
 if $DRY_RUN; then

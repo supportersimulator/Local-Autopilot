@@ -89,6 +89,14 @@ except Exception:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         _headless_executor = None
 
+try:  # ZSF — fleet escalation is optional
+    from local_autopilot.tools import fleet_escalate as _fleet_escalate  # noqa: E402
+except Exception:  # noqa: BLE001
+    try:
+        import fleet_escalate as _fleet_escalate  # noqa: E402
+    except Exception:  # noqa: BLE001
+        _fleet_escalate = None
+
 
 # ---------------------------------------------------------------------------
 # Path resolvers — read env every call so test monkeypatches take effect.
@@ -286,6 +294,10 @@ COUNTER_KEYS = (
     "headless_executor_cli_missing",
     "headless_executor_budget_refused",
     "headless_executor_errors",
+    # Fleet escalation (opt-in via --fleet-escalate)
+    "fleet_escalate_attempts",
+    "fleet_escalate_delivered",
+    "fleet_escalate_errors",
 )
 
 
@@ -983,6 +995,27 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--headless-timeout-per-agent-s", type=int, default=240,
         help="Per-agent wall-clock timeout in seconds (default 240).",
     )
+    parser.add_argument(
+        "--fleet-escalate", action="store_true",
+        default=(os.environ.get("AUTOPILOT_FLEET_ESCALATE", "0") in ("1", "true", "TRUE")),
+        help=(
+            "Opt-in: when --cycles is exhausted without satisfaction, POST "
+            "the unresolved cycle to the Multi-Fleet chief node (mac1) via "
+            "the local fleet daemon for adjudication."
+        ),
+    )
+    parser.add_argument(
+        "--fleet-escalate-url", type=str,
+        default=os.environ.get(
+            "AUTOPILOT_FLEET_ESCALATE_URL", "http://127.0.0.1:8855/message"
+        ),
+        help="Fleet daemon URL for escalation POST (default http://127.0.0.1:8855/message).",
+    )
+    parser.add_argument(
+        "--fleet-escalate-timeout-s", type=int,
+        default=int(os.environ.get("AUTOPILOT_FLEET_ESCALATE_TIMEOUT_S", "10")),
+        help="HTTP timeout for the escalation POST (default 10s).",
+    )
     args = parser.parse_args(argv)
 
     # Watch mode is mutually exclusive with --cycles N>1.
@@ -1106,6 +1139,44 @@ def main(argv: Optional[list[str]] = None) -> int:
             # Non-watch: respect --cycles N upper bound.
             if not args.watch and cycle_idx > args.cycles:
                 _bump(counters, "cycles_aborted_cycle_cap")
+                # FLEET_ESCALATE — if the runner exhausted its cycle budget
+                # without satisfaction, opt-in escalate to the chief node so
+                # a different vendor LLM with deeper ContextDNA can break the
+                # tie. ZSF: never raises; outcome recorded in counters + event.
+                _last_satisfied = bool(getattr(last_result, "satisfied", False))
+                if (
+                    args.fleet_escalate
+                    and not args.dry_run
+                    and not _last_satisfied
+                    and last_result is not None
+                    and _fleet_escalate is not None
+                ):
+                    _bump(counters, "fleet_escalate_attempts")
+                    try:
+                        _esc = _fleet_escalate.escalate_to_fleet_chief(
+                            cycle_dir=last_result.cycle_dir,
+                            cycles_run=args.cycles,
+                            url=args.fleet_escalate_url,
+                            timeout_s=args.fleet_escalate_timeout_s,
+                            counters=counters,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — ZSF
+                        _bump(counters, "fleet_escalate_errors",
+                              note=f"runner_wrapper:{exc}")
+                        _esc = {
+                            "delivered": False,
+                            "channel": "skipped",
+                            "detail": f"runner_wrapper:{exc}",
+                        }
+                    if _esc.get("delivered"):
+                        _bump(counters, "fleet_escalate_delivered")
+                    print(json.dumps({
+                        "event": "fleet_escalate",
+                        "cycle": args.cycles,
+                        "delivered": bool(_esc.get("delivered")),
+                        "channel": _esc.get("channel", ""),
+                        "detail": _esc.get("detail", "")[:300],
+                    }))
                 _write_counters(counters)
                 print(json.dumps({
                     "event": "exit",
