@@ -331,17 +331,24 @@ def is_user_locked() -> bool:
 
 
 def _check_transition(
-    current: State, new_mode: str, actor: str
+    current: State, new_mode: str, actor: str,
+    *, reason: str = "", temporary_until: Optional[str] = None,
 ) -> tuple[bool, str]:
-    """Pure invariant check. Returns (ok, reason_if_not_ok)."""
+    """Pure invariant check. Returns (ok, reason_if_not_ok).
+
+    Invariant 3 — TEMPORARY_BOUNDED — added 2026-05-14 after Aaron caught the
+    CLI letting `autopilot temp "..."` succeed with temporary_until=None and a
+    reason that did not contain 'atlas-decision'. The CONTRACT.md required
+    this rule; the in-tree mock enforced it; this real module did not. The
+    invariance test passed only because the conftest forced HAS_F1=False so
+    every invariance test ran against the mock — textbook test theater. The
+    rule is now enforced HERE, in the real module, with NO actor-based
+    carve-out. Invariance does not have exceptions.
+    """
     if new_mode not in VALID_MODES:
         return False, f"invariant:invalid_mode:{new_mode}"
     if actor not in VALID_ACTORS:
         return False, f"invariant:invalid_actor:{actor}"
-
-    # No-op (same mode) is allowed but recorded.
-    if current.mode == new_mode:
-        return True, ""
 
     # Invariant 4: Atlas CANNOT set on_permanent.
     if actor == "atlas" and new_mode == "on_permanent":
@@ -357,6 +364,25 @@ def _check_transition(
     # turn it off". An on_permanent state is sticky for the user.
     if current.mode == "on_permanent" and actor != "user":
         return False, "invariant:user_lock:permanent_is_user_only"
+
+    # Invariant 3: on_temporary must be bounded.
+    # Either a temporary_until deadline OR a reason containing 'atlas-decision'
+    # (the Atlas-managed self-bound case where the runner enforces the bound
+    # internally). NO actor-based carve-out: user must supply --until.
+    # Note: this fires even for no-op (current == new_mode) transitions to
+    # `on_temporary`, so a stuck bad state CANNOT be re-entered without a
+    # proper bound. The same-mode shortcut now sits AFTER this check.
+    if new_mode == "on_temporary":
+        has_until = temporary_until is not None and str(temporary_until).strip() != ""
+        has_atlas_decision = "atlas-decision" in (reason or "")
+        if not has_until and not has_atlas_decision:
+            return False, "invariant:temporary_bounded:requires_until_or_atlas_decision"
+
+    # No-op (same mode) is allowed but recorded — but only after every
+    # invariant above has been re-validated. This prevents a stuck bad
+    # state from being perpetuated via repeated same-mode "transitions".
+    if current.mode == new_mode:
+        return True, ""
 
     return True, ""
 
@@ -378,7 +404,10 @@ def transition(
         except OSError as e:
             return False, f"io:read:{e}"
 
-        ok, err = _check_transition(current, new_mode, actor)
+        ok, err = _check_transition(
+            current, new_mode, actor,
+            reason=reason, temporary_until=temporary_until,
+        )
         _incr(
             "autopilot_transitions_total",
             actor=actor,

@@ -163,7 +163,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_temp.add_argument(
         "--until",
         default=None,
-        help="ISO8601 timestamp marking the soft expiry (informational only).",
+        help=(
+            "ISO8601 timestamp marking the deadline. REQUIRED unless reason "
+            "contains 'atlas-decision' (Atlas-managed self-bound case). "
+            "Invariant #3 TEMPORARY_BOUNDED — see tests/invariance/CONTRACT.md."
+        ),
     )
     p_temp.add_argument(
         "--actor",

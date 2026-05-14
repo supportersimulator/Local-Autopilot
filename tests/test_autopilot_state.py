@@ -78,7 +78,7 @@ def test_user_can_set_on_permanent(tmp_state):
 
 
 def test_user_can_set_on_temporary(tmp_state):
-    ok, err = st.transition("on_temporary", actor="user", reason="trying-it")
+    ok, err = st.transition("on_temporary", actor="user", reason="trying-it", temporary_until="2099-01-01T00:00:00Z")
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -89,7 +89,7 @@ def test_user_can_set_on_temporary(tmp_state):
 def test_atlas_can_set_on_temporary_from_off(tmp_state):
     ok, err = st.transition(
         "on_temporary", actor="atlas", reason="hardening_pass"
-    )
+    , temporary_until="2099-01-01T00:00:00Z")
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -97,7 +97,7 @@ def test_atlas_can_set_on_temporary_from_off(tmp_state):
 
 
 def test_atlas_can_clear_on_temporary(tmp_state):
-    assert st.transition("on_temporary", actor="atlas", reason="r")[0]
+    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")[0]
     ok, err = st.transition("off", actor="atlas", reason="done")
     assert ok, err
     assert st.read_state().mode == "off"
@@ -116,7 +116,7 @@ def test_user_can_swap_on_permanent_to_on_temporary(tmp_state):
     assert st.transition("on_permanent", actor="user")[0]
     ok, err = st.transition(
         "on_temporary", actor="user", reason="aaron-downgraded"
-    )
+    , temporary_until="2099-01-01T00:00:00Z")
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -136,7 +136,7 @@ def test_atlas_cannot_set_on_permanent_from_off(tmp_state):
 
 
 def test_atlas_cannot_set_on_permanent_from_on_temporary(tmp_state):
-    assert st.transition("on_temporary", actor="atlas", reason="r")[0]
+    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")[0]
     ok, err = st.transition(
         "on_permanent", actor="atlas", reason="sneaky-upgrade"
     )
@@ -156,7 +156,7 @@ def test_atlas_cannot_clear_on_permanent(tmp_state):
 def test_atlas_cannot_demote_on_permanent_to_temporary(tmp_state):
     """Closing the side-door: temp→off by Atlas would effectively clear the lock."""
     assert st.transition("on_permanent", actor="user")[0]
-    ok, err = st.transition("on_temporary", actor="atlas", reason="back-door")
+    ok, err = st.transition("on_temporary", actor="atlas", reason="back-door", temporary_until="2099-01-01T00:00:00Z")
     assert ok is False
     assert "user_lock" in err
     assert st.read_state().mode == "on_permanent"
@@ -169,7 +169,7 @@ def test_invalid_mode_is_rejected(tmp_state):
 
 
 def test_invalid_actor_is_rejected(tmp_state):
-    ok, err = st.transition("on_temporary", actor="robot")
+    ok, err = st.transition("on_temporary", actor="robot", temporary_until="2099-01-01T00:00:00Z")
     assert ok is False
     assert "invalid_actor" in err
 
@@ -253,7 +253,7 @@ def test_concurrent_transitions_are_race_safe(tmp_state):
         # half try to set on_temporary, half try to set off — all as user
         # so they're all individually valid.
         target = "on_temporary" if i % 2 == 0 else "off"
-        ok, err = st.transition(target, actor="user", reason=f"t{i}")
+        ok, err = st.transition(target, actor="user", reason=f"atlas-decision t{i}", temporary_until="2099-01-01T00:00:00Z" if target == "on_temporary" else None)
         if not ok:
             errors.append(err)
 
@@ -281,7 +281,7 @@ def test_concurrent_transitions_are_race_safe(tmp_state):
 
 
 def test_history_is_monotonic_and_appends(tmp_state):
-    st.transition("on_temporary", actor="atlas", reason="a")
+    st.transition("on_temporary", actor="atlas", reason="a", temporary_until="2099-01-01T00:00:00Z")
     st.transition("off", actor="atlas", reason="b")
     st.transition("on_permanent", actor="user", reason="c")
     s = st.read_state()
@@ -333,7 +333,7 @@ def test_blocked_transitions_increment_counter(tmp_state):
 def test_is_active_and_is_user_locked(tmp_state):
     assert st.is_active() is False
     assert st.is_user_locked() is False
-    st.transition("on_temporary", actor="atlas", reason="r")
+    st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")
     assert st.is_active() is True
     assert st.is_user_locked() is False
     st.transition("off", actor="atlas")
@@ -361,7 +361,7 @@ def test_hook_should_run_next_cycle_on_permanent(tmp_state):
 
 
 def test_hook_atlas_temp_request_grants_from_off(tmp_state):
-    ok, msg = hk.on_atlas_temp_request("hardening pass", temporary_until=None)
+    ok, msg = hk.on_atlas_temp_request("hardening pass", temporary_until="2099-01-01T00:00:00Z")
     assert ok, msg
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -370,7 +370,7 @@ def test_hook_atlas_temp_request_grants_from_off(tmp_state):
 
 def test_hook_atlas_temp_request_blocked_when_user_locked(tmp_state):
     st.transition("on_permanent", actor="user")
-    ok, msg = hk.on_atlas_temp_request("please?")
+    ok, msg = hk.on_atlas_temp_request("please?", temporary_until="2099-01-01T00:00:00Z")
     assert ok is False
     assert "user_lock" in msg or "already_on_permanent" in msg
     assert st.read_state().mode == "on_permanent"
@@ -383,7 +383,7 @@ def test_hook_atlas_temp_release_only_from_temporary(tmp_state):
     assert "not_in_temporary" in msg
 
     # Elevate then release.
-    hk.on_atlas_temp_request("r")
+    hk.on_atlas_temp_request("r", temporary_until="2099-01-01T00:00:00Z")
     ok, msg = hk.on_atlas_temp_release("done")
     assert ok, msg
     assert st.read_state().mode == "off"
