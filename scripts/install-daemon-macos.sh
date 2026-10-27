@@ -56,6 +56,9 @@ _info() { echo "[install-daemon] $*"; }
 [ -d "$REPO_DIR/daemons" ] || _fail "daemons/ dir missing in $REPO_DIR"
 [ -f "$REPO_DIR/daemons/autopilot-tick.plist.template" ] || _fail "autopilot-tick.plist.template missing"
 [ -x "$REPO_DIR/.venv/bin/python3" ] || _fail "venv not built — run 'bash install.sh' first"
+# Kill-switch control dir must exist (runner fails closed without it).
+"$REPO_DIR/.venv/bin/python3" -m local_autopilot.tools.control_dir init >/dev/null \
+    || _fail "could not initialise control dir (python -m local_autopilot.tools.control_dir init)"
 
 mkdir -p "$LAUNCH_AGENTS"
 

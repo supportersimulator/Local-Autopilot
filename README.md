@@ -228,7 +228,7 @@ Realistic per-cycle spend:
 | Re-evaluate (MLX)        | $0.00         | local                              |
 | **Per-cycle total**      | **$0.05 - $0.40** | depending on agent depth       |
 
-The cumulative `cost_cap_usd` (default $5.00) is a hard wall enforced per `archloop_runner` invocation. Hitting it bumps `cycles_aborted_cost` and aborts cleanly -- no layer can extend the cap mid-cycle. Fleet escalation (Layer 5) hits the chief's Opus, the most expensive single call in the system; it is gated by the 8-cycle cap so it only fires when local thinking has provably failed.
+The spending cap is `cost_cap_usd_per_window` in `config.yaml` (default $50 per rolling 24 h), enforced **across** invocations by a persistent ledger (`~/.local/state/local-autopilot/ledger.jsonl` on Linux, `~/Library/Application Support/Local-Autopilot/` on macOS; dir 0700, files 0600). `--cost-cap-usd` / `AUTOPILOT_COST_CAP_USD` may only lower it. A paid call whose cost is unknown (timeout, error, unparseable cost line) is charged a penalty and stops the run; an unreadable, mis-permissioned or deleted ledger stops the runner with exit 6 (`cost_ledger_unreadable`). Hitting it bumps `cycles_aborted_cost` and aborts cleanly -- no layer can extend the cap mid-cycle. Fleet escalation (Layer 5) hits the chief's Opus, the most expensive single call in the system; it is gated by the 8-cycle cap so it only fires when local thinking has provably failed.
 
 Full cost accounting: [docs/epistemic-stack.md#7-cost-accounting](docs/epistemic-stack.md#7-cost-accounting).
 
@@ -252,7 +252,11 @@ Mechanics, verified in `autopilot_state.py`:
 * Atlas cannot set `on_permanent`. Hard-coded refusal.
 * Only `actor=user` can clear `on_permanent -> off`. Hard-coded refusal.
 
-A kill file at `/tmp/autopilot.stop` (override via `AUTOPILOT_KILL_FILE`) is a belt-and-suspenders emergency stop: any cycle observes it and aborts (`cycles_aborted_kill_file`).
+`autopilot temp` requires `--until` (ISO-8601 with timezone, more than 60 s and at most 8 h ahead). Atlas elevations without a deadline get 30 minutes. Once the deadline passes, the next state read reverts to `off` as the internal `system` actor (also when the wall clock is rolled back on the same boot, and when the deadline is unparseable).
+
+The emergency kill switch is a `STOP` file in a user-only control dir (`~/.config/local-autopilot/control/` on Linux, `~/Library/Application Support/Local-Autopilot/control/` on macOS), managed with `python -m local_autopilot.tools.control_dir init|stop|resume|status`. It **fails closed**: a missing dir, missing `RUN` marker, symlink, wrong owner, mode looser than 0700, or any read error stops the runner (`cycles_aborted_kill_file`, `kill_switch_unreadable`). There is no env-var override.
+
+> Caveat: agents still run as your uid with `--dangerously-skip-permissions` (headless_executor.py). Until that is removed, an agent can still edit the ledger, state file and control dir. These changes make the switches durable, non-redirectable and fail-closed. They are not yet a wall against a misbehaving agent.
 
 ---
 

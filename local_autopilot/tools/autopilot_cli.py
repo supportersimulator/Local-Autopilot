@@ -74,7 +74,7 @@ def cmd_status(_args) -> int:
 
 
 def _do_transition(new_mode: str, actor: str, reason: str, until: Optional[str]) -> int:
-    if actor not in st.VALID_ACTORS:
+    if actor not in st.CLI_ACTORS:
         print(f"ERROR: invalid actor {actor!r}", file=sys.stderr)
         _log_event({"cmd": "transition", "error": "invalid_actor", "actor": actor})
         return 2
@@ -174,14 +174,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--until",
         default=None,
         help=(
-            "ISO8601 timestamp marking the deadline. REQUIRED unless reason "
-            "contains 'atlas-decision' (Atlas-managed self-bound case). "
+            "ISO8601 deadline WITH timezone (e.g. 2026-10-26T18:00:00-07:00). "
+            "Must be >60s and <=8h from now; REQUIRED for actor=user. Atlas "
+            "without --until gets a 30-minute default. "
             "Invariant #3 TEMPORARY_BOUNDED — see tests/invariance/CONTRACT.md."
         ),
     )
     p_temp.add_argument(
         "--actor",
-        choices=sorted(st.VALID_ACTORS),
+        choices=sorted(st.CLI_ACTORS),
         default="user",
         help="Who is requesting the temporary elevation (default: user).",
     )

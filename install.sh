@@ -165,6 +165,11 @@ else
     fi
 fi
 
+# --- 7b. User-only control dir (kill switch). Fail-closed: the runner refuses
+# to start if it is missing, so create it (0700 + RUN marker). Idempotent.
+log "initialising kill-switch control dir"
+"$REPO_DIR/.venv/bin/python3" -m local_autopilot.tools.control_dir init
+
 # --- 8. Next steps -----------------------------------------------------------
 cat <<NEXT
 
@@ -174,13 +179,14 @@ cat <<NEXT
     .venv/bin/autopilot status                  # current mode + last 5 transitions
     .venv/bin/autopilot on                      # turn autopilot on (permanent — only you can turn it off)
     .venv/bin/autopilot off                     # turn autopilot off
-    .venv/bin/autopilot temp "<reason>"         # temporary elevation (timer-bound)
+    .venv/bin/autopilot temp "<reason>" --until <ISO8601+tz, <=8h>  # temporary elevation (auto-expires)
+    .venv/bin/python3 -m local_autopilot.tools.control_dir stop|resume|status  # emergency kill switch
 
   Run a single cycle (dry-run — no LLM calls):
     .venv/bin/python3 -m local_autopilot.tools.archloop_runner --dry-run --cycles 1
 
   Run a real cycle (needs MLX or DeepSeek configured — see README.md):
-    .venv/bin/python3 -m local_autopilot.tools.archloop_runner --cycles 5 --cost-cap-usd 1.0
+    .venv/bin/python3 -m local_autopilot.tools.archloop_runner --cycles 5   # spend capped by cost_cap_usd_per_window (config.yaml)
 
   Re-run this installer anytime — it is idempotent.
 

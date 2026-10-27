@@ -48,14 +48,20 @@ def isolate_paths(tmp_path, monkeypatch):
     module-level constant.
     """
     counters = tmp_path / "counters.json"
-    kill = tmp_path / "autopilot.stop"
+    # Kill switch now lives in a user-only control dir (fail-closed); the
+    # old /tmp file + AUTOPILOT_KILL_FILE override are gone.
+    import control_dir as _cd
+    import cost_ledger as _cl
+    _cd.set_control_dir(tmp_path / "control")
+    _cd.init_control_dir()
+    _cl.set_ledger_dir(tmp_path / "ledger")
+    kill = tmp_path / "control" / _cd.STOP_NAME
     trace = tmp_path / "synaptic-trace.jsonl"
     state_file = tmp_path / "autopilot_state.json"
     progress = tmp_path / "progress.json"
     log_root = tmp_path / "fleet-autopilot"
 
     monkeypatch.setenv("AUTOPILOT_COUNTERS_PATH", str(counters))
-    monkeypatch.setenv("AUTOPILOT_KILL_FILE", str(kill))
     monkeypatch.setenv("AUTOPILOT_SYNAPTIC_TRACE", str(trace))
     monkeypatch.setenv("AUTOPILOT_STATE_FILE", str(state_file))
     monkeypatch.setenv("AUTOPILOT_PROGRESS_FILE", str(progress))

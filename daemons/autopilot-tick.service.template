@@ -24,7 +24,7 @@ Type=oneshot
 WorkingDirectory=__REPO_DIR__
 Environment=PYTHONPATH=__REPO_DIR__:__REPO_DIR__/local_autopilot
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=__REPO_DIR__/.venv/bin/python3 -m local_autopilot.tools.archloop_runner --cycles 1 --cost-cap-usd 0.50
+ExecStart=__REPO_DIR__/.venv/bin/python3 -m local_autopilot.tools.archloop_runner --cycles 1
 Nice=10
 IOSchedulingClass=idle
 StandardOutput=append:/home/__USER__/.context-dna/autopilot-logs/systemd.out

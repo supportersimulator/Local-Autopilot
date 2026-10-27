@@ -36,8 +36,13 @@ def should_run_next_cycle() -> tuple[bool, str]:
     Returns (should_run, reason).
         - (False, "user_disabled") when mode == "off"
         - (True, "on_permanent")   when mode == "on_permanent"
-        - (True, "on_temporary")   when mode == "on_temporary"
+        - (True, "on_temporary")   when mode == "on_temporary" and before deadline
+        - (False, "expired")       when on_temporary passed its deadline (or the
+                                   deadline is unparseable); state reverted to
+                                   off by actor=system
     """
+    if st.expire_if_due():
+        return False, "expired"
     state = st.read_state()
     if state.mode == "off":
         return False, "user_disabled"
