@@ -1,0 +1,96 @@
+......................................                                   [100%]
+==================================== PASSES ====================================
+_____________________ test_cap_persists_across_invocations _____________________
+----------------------------- Captured stdout call -----------------------------
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-81/test_cap_persists_across_invoc0/logs/c1", "satisfied": true, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.6, "watch": false}
+{"event": "exit", "reason": "satisfied", "cycle": 1}
+{"event": "exit", "reason": "cost_cap", "cycle": 1, "cost_usd_total": 0.6}
+__________________________ test_cli_cannot_raise_cap ___________________________
+----------------------------- Captured stdout call -----------------------------
+{"event": "exit", "reason": "cost_cap", "cycle": 1, "cost_usd_total": 5.0}
+----------------------------- Captured stderr call -----------------------------
+{"event": "cost_cap_override_ignored", "source": "--cost-cap-usd", "requested": 50.0, "config_cap": 5.0}
+____________________ test_runner_refuses_when_ledger_unsafe ____________________
+----------------------------- Captured stdout call -----------------------------
+{"event": "exit", "reason": "cost_ledger_unreadable", "error": "/tmp/pytest-of-box/pytest-81/test_runner_refuses_when_ledge0/ledger mode 0o755 is looser than 0700; fix with: chmod 700 '/tmp/pytest-of-box/pytest-81/test_runner_refuses_when_ledge0/ledger'", "ledger_dir": "/tmp/pytest-of-box/pytest-81/test_runner_refuses_when_ledge0/ledger", "recover": "fix ownership/mode (dir 0700, files 0600) or the line named in the error; do NOT delete the ledger (detected as tamper)"}
+________________________ test_hook_stops_after_deadline ________________________
+------------------------------ Captured log call -------------------------------
+WARNING  autopilot.state:autopilot_state.py:445 autopilot temporary mode expired (expired:2026-10-27T01:28:17.874477+00:00); reverted to off
+______________________ test_clock_rollback_still_expires _______________________
+------------------------------ Captured log call -------------------------------
+WARNING  autopilot.state:autopilot_state.py:445 autopilot temporary mode expired (expired:2026-10-27T01:28:17.876623+00:00); reverted to off
+__________________________ test_crash_restart_reverts __________________________
+------------------------------ Captured log call -------------------------------
+WARNING  autopilot.state:autopilot_state.py:445 autopilot temporary mode expired (expired:2026-10-27T01:25:17.878581+00:00); reverted to off
+______________________ test_corrupt_deadline_fails_closed ______________________
+------------------------------ Captured log call -------------------------------
+WARNING  autopilot.state:autopilot_state.py:445 autopilot temporary mode expired (expired:sometext); reverted to off
+____________________ test_runner_aborts_mid_watch_on_expiry ____________________
+----------------------------- Captured stdout call -----------------------------
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-81/test_runner_aborts_mid_watch_o0/c1", "satisfied": false, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0, "watch": true}
+{"event": "watch_sleep", "cycle": 1, "sleep_s": 0, "reason": "default"}
+{"event": "exit", "reason": "state.mode == 'off'", "mode": "off", "cycle": 2}
+------------------------------ Captured log call -------------------------------
+WARNING  autopilot.state:autopilot_state.py:445 autopilot temporary mode expired (expired:2026-10-27T01:28:17.884824+00:00); reverted to off
+________________________ test_cli_rejects_actor_system _________________________
+----------------------------- Captured stderr call -----------------------------
+usage: autopilot temp [-h] [--until UNTIL] [--actor {atlas,user}] reason
+autopilot temp: error: argument --actor: invalid choice: 'system' (choose from atlas, user)
+________________________ test_missing_control_dir_stops ________________________
+----------------------------- Captured stderr call -----------------------------
+{"event": "kill_switch_stop", "reason": "control_dir_missing", "control_dir": "/tmp/pytest-of-box/pytest-81/test_missing_control_dir_stops0/does-not-exist", "recover": "python -m local_autopilot.tools.control_dir resume"}
+____________________________ test_loose_perms_stop _____________________________
+----------------------------- Captured stderr call -----------------------------
+{"event": "kill_switch_stop", "reason": "unsafe:/tmp/pytest-of-box/pytest-81/test_loose_perms_stop0/control mode 0o755 is looser than 0700; fix with: chmod 700 '/tmp/pytest-of-box/pytest-81/test_loose_perms_stop0/control'", "control_dir": "/tmp/pytest-of-box/pytest-81/test_loose_perms_stop0/control", "recover": "python -m local_autopilot.tools.control_dir resume"}
+________________________ test_runner_counts_unreadable _________________________
+----------------------------- Captured stdout call -----------------------------
+{"event": "exit", "reason": "kill_file", "cycle": 1}
+----------------------------- Captured stderr call -----------------------------
+{"event": "kill_switch_stop", "reason": "unsafe:/tmp/pytest-of-box/pytest-81/test_runner_counts_unreadable0/control mode 0o777 is looser than 0700; fix with: chmod 700 '/tmp/pytest-of-box/pytest-81/test_runner_counts_unreadable0/control'", "control_dir": "/tmp/pytest-of-box/pytest-81/test_runner_counts_unreadable0/control", "recover": "python -m local_autopilot.tools.control_dir resume"}
+__________________________ test_cli_status_exit_codes __________________________
+----------------------------- Captured stdout call -----------------------------
+{"control_dir": "/tmp/pytest-of-box/pytest-81/test_cli_status_exit_codes0/control", "state": "run", "reason": "ok"}
+{"control_dir": "/tmp/pytest-of-box/pytest-81/test_cli_status_exit_codes0/control", "state": "stop", "reason": "stop_file"}
+{"control_dir": "/tmp/pytest-of-box/pytest-81/test_cli_status_exit_codes0/control", "state": "stop", "reason": "stop_file"}
+{"control_dir": "/tmp/pytest-of-box/pytest-81/test_cli_status_exit_codes0/control", "state": "run", "reason": "ok"}
+{"control_dir": "/tmp/pytest-of-box/pytest-81/test_cli_status_exit_codes0/control", "state": "run", "reason": "ok"}
+=========================== short test summary info ============================
+PASSED tests/test_cost_ledger.py::test_cap_persists_across_invocations
+PASSED tests/test_cost_ledger.py::test_cli_cannot_raise_cap
+PASSED tests/test_cost_ledger.py::test_unparseable_cost_line_fails_closed
+PASSED tests/test_cost_ledger.py::test_cross_exam_timeout_is_not_free
+PASSED tests/test_cost_ledger.py::test_templates_have_no_cost_flag
+PASSED tests/test_cost_ledger.py::test_runner_refuses_when_ledger_unsafe
+PASSED tests/test_cost_ledger.py::test_rolling_window_expires
+PASSED tests/test_cost_ledger.py::test_crash_after_reserve_counts
+PASSED tests/test_cost_ledger.py::test_concurrent_reserve_never_exceeds
+PASSED tests/test_cost_ledger.py::test_bad_perms_refuse
+PASSED tests/test_cost_ledger.py::test_deleted_ledger_is_tamper_not_reset
+PASSED tests/test_cost_ledger.py::test_corrupt_line_fails_closed
+PASSED tests/test_cost_ledger.py::test_clock_backwards_conservative
+PASSED tests/test_cost_ledger.py::test_ledger_never_in_tmp
+PASSED tests/test_autopilot_expiry.py::test_until_garbage_rejected
+PASSED tests/test_autopilot_expiry.py::test_until_in_past_rejected
+PASSED tests/test_autopilot_expiry.py::test_until_beyond_max_hours_rejected
+PASSED tests/test_autopilot_expiry.py::test_atlas_decision_no_longer_bypasses
+PASSED tests/test_autopilot_expiry.py::test_hook_stops_after_deadline
+PASSED tests/test_autopilot_expiry.py::test_clock_rollback_still_expires
+PASSED tests/test_autopilot_expiry.py::test_crash_restart_reverts
+PASSED tests/test_autopilot_expiry.py::test_corrupt_deadline_fails_closed
+PASSED tests/test_autopilot_expiry.py::test_system_actor_only_expires
+PASSED tests/test_autopilot_expiry.py::test_runner_aborts_mid_watch_on_expiry
+PASSED tests/test_autopilot_expiry.py::test_system_actor_cannot_turn_on
+PASSED tests/test_autopilot_expiry.py::test_cli_rejects_actor_system
+PASSED tests/test_autopilot_expiry.py::test_on_permanent_unaffected
+PASSED tests/test_autopilot_expiry.py::test_valid_future_deadline_runs
+PASSED tests/test_kill_switch.py::test_default_control_dir_not_tmp
+PASSED tests/test_kill_switch.py::test_env_override_ignored
+PASSED tests/test_kill_switch.py::test_missing_control_dir_stops
+PASSED tests/test_kill_switch.py::test_loose_perms_stop
+PASSED tests/test_kill_switch.py::test_symlinked_control_dir_stops
+PASSED tests/test_kill_switch.py::test_missing_run_marker_stops
+PASSED tests/test_kill_switch.py::test_stat_error_stops
+PASSED tests/test_kill_switch.py::test_runner_counts_unreadable
+PASSED tests/test_kill_switch.py::test_healthy_dir_runs_and_resume
+PASSED tests/test_kill_switch.py::test_cli_status_exit_codes
+38 passed in 0.15s

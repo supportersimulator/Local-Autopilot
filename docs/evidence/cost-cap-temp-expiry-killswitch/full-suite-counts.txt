@@ -1,0 +1,12 @@
+Python 3.13.5, pytest 9.0.3, .venv from requirements.txt, `python -m pytest -q`
+
+Baseline @ 44f7fc9 (main):            166 passed, 3 skipped
+New tests vs 44f7fc9 (commit 3f70c35): 34 failed, 4 passed (4 = positive guards that already held)
+New tests after fix (856eaab):        38 passed
+Full suite after fix (856eaab):       204 passed, 3 skipped  (166 + 38 new)
+New tests + test_autopilot_state.py run 5x after the fix: 67 passed every time
+
+Skips (unchanged, pre-existing):
+- test_invariant_live_data.py:94  synaptic_client.fetch_complexity_vectors not present
+- test_invariant_live_data.py:129 F2 synaptic_client not shipped yet
+- test_invariant_resource_caps.py:222 archloop_runner.Runner class not present
