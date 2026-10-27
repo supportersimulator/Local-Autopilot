@@ -1,0 +1,689 @@
+FFFFFFFFFFFFFFFFFFFFFFFF....FFFFFFFFFF                                   [100%]
+=================================== FAILURES ===================================
+_____________________ test_cap_persists_across_invocations _____________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_cap_persists_across_invoc0/control'), 'counters': PosixPath('...cross_invoc0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_cap_persists_across_invoc0/logs'), ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd9756ea0>
+
+    def test_cap_persists_across_invocations(env, monkeypatch):
+        """Two separate 30-min ticks share one budget: tick 2 must refuse."""
+        calls: list = []
+        monkeypatch.setattr(archloop_runner, "run_cycle", _fake_cycle(0.60, calls))
+        rc1 = archloop_runner.main(["--cycles", "1", "--cost-cap-usd", "0.50"])
+        rc2 = archloop_runner.main(["--cycles", "1", "--cost-cap-usd", "0.50"])
+>       assert len(calls) == 1, f"second invocation ran a cycle (calls={calls})"
+E       AssertionError: second invocation ran a cycle (calls=[0.0, 0.0])
+E       assert 2 == 1
+E        +  where 2 = len([0.0, 0.0])
+
+tests/test_cost_ledger.py:51: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_cap_persists_across_invoc0/logs/c1", "satisfied": true, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.6, "watch": false}
+{"event": "exit", "reason": "satisfied", "cycle": 1}
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_cap_persists_across_invoc0/logs/c2", "satisfied": true, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.6, "watch": false}
+{"event": "exit", "reason": "satisfied", "cycle": 1}
+__________________________ test_cli_cannot_raise_cap ___________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_cli_cannot_raise_cap0/control'), 'counters': PosixPath('/tmp/...cannot_raise_cap0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_cli_cannot_raise_cap0/logs'), ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd9b44d60>
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_cli_cannot_raise_cap0')
+
+    def test_cli_cannot_raise_cap(env, monkeypatch, tmp_path):
+        """config says $5/window; --cost-cap-usd 50 must not raise it."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("cost_cap_usd_per_window: 5.0\ncost_window: rolling_24h\n")
+        monkeypatch.setattr(archloop_runner, "CONFIG_PATH", cfg, raising=False)
+        if cost_ledger is not None:
+            led = cost_ledger.open_ledger(cap_usd=100.0)
+            led.charge("prior-tick", 5.0)
+        calls: list = []
+        monkeypatch.setattr(archloop_runner, "run_cycle", _fake_cycle(1.0, calls))
+        rc = archloop_runner.main(["--cycles", "1", "--cost-cap-usd", "50"])
+>       assert calls == [], "cycle ran although $5 window cap was already spent"
+E       AssertionError: cycle ran although $5 window cap was already spent
+E       assert [0.0] == []
+E         
+E         Left contains one more item: 0.0
+E         Use -v to get more diff
+
+tests/test_cost_ledger.py:66: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_cli_cannot_raise_cap0/logs/c1", "satisfied": true, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 1.0, "watch": false}
+{"event": "exit", "reason": "satisfied", "cycle": 1}
+___________________ test_unparseable_cost_line_fails_closed ____________________
+
+    def test_unparseable_cost_line_fails_closed():
+        v = archloop_runner.parse_3s_verdict("HOLD\ncost_usd: N/A\n")
+>       assert v["cost_usd"] is None, f"unparseable cost booked as {v['cost_usd']!r}"
+E       AssertionError: unparseable cost booked as 0.05
+E       assert 0.05 is None
+
+tests/test_cost_ledger.py:75: AssertionError
+_____________________ test_cross_exam_timeout_is_not_free ______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_cross_exam_timeout_is_not0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd8ed2c30>
+
+    def test_cross_exam_timeout_is_not_free(tmp_path, monkeypatch):
+        cli = tmp_path / "3s"
+        cli.write_text("#!/bin/sh\n")
+        cli.chmod(0o700)
+    
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd="3s", timeout=1)
+    
+        monkeypatch.setattr(archloop_runner.subprocess, "run", boom)
+        v = archloop_runner.run_cross_exam("agg", cli_path=str(cli), timeout_s=1)
+>       assert v["cost_usd"] is None, "timed-out cross-exam booked as $0"
+E       AssertionError: timed-out cross-exam booked as $0
+E       assert 0.0 is None
+
+tests/test_cost_ledger.py:89: AssertionError
+_______________________ test_templates_have_no_cost_flag _______________________
+
+    def test_templates_have_no_cost_flag():
+        for name in ("autopilot-tick.plist.template", "autopilot-tick.service.template"):
+            text = (REPO_ROOT / "daemons" / name).read_text()
+>           assert "--cost-cap-usd" not in text, f"{name} still passes --cost-cap-usd"
+E           AssertionError: autopilot-tick.plist.template still passes --cost-cap-usd
+E           assert '--cost-cap-usd' not in '<?xml versi...\n</plist>\n'
+E             
+E             '--cost-cap-usd' is contained here:
+E                 <string>--cost-cap-usd</string>
+E                   <string>50.00</string>
+E                 </array>
+E               
+E                 <key>WorkingDirectory</key>...
+E             
+E             ...Full output truncated (29 lines hidden), use '-vv' to show
+
+tests/test_cost_ledger.py:104: AssertionError
+____________________ test_runner_refuses_when_ledger_unsafe ____________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_runner_refuses_when_ledge0/control'), 'counters': PosixPath('..._when_ledge0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_runner_refuses_when_ledge0/logs'), ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd9753460>
+
+    def test_runner_refuses_when_ledger_unsafe(env, monkeypatch):
+>       need(cost_ledger, "cost_ledger")
+
+tests/test_cost_ledger.py:108: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+_________________________ test_rolling_window_expires __________________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_rolling_window_expires0')
+
+    def test_rolling_window_expires(tmp_path):
+        clk = _Clock()
+>       led = _ledger(tmp_path, cap=5.0, clock=clk)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:138: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+_______________________ test_crash_after_reserve_counts ________________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_crash_after_reserve_count0')
+
+    def test_crash_after_reserve_counts(tmp_path):
+>       led = _ledger(tmp_path)
+              ^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:147: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+____________________ test_concurrent_reserve_never_exceeds _____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_concurrent_reserve_never_0')
+
+    def test_concurrent_reserve_never_exceeds(tmp_path):
+>       need(cost_ledger, "cost_ledger")
+
+tests/test_cost_ledger.py:168: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+____________________________ test_bad_perms_refuse _____________________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_bad_perms_refuse0')
+
+    def test_bad_perms_refuse(tmp_path):
+>       led = _ledger(tmp_path)
+              ^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:179: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+___________________ test_deleted_ledger_is_tamper_not_reset ____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_deleted_ledger_is_tamper_0')
+
+    def test_deleted_ledger_is_tamper_not_reset(tmp_path):
+>       led = _ledger(tmp_path)
+              ^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:186: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+________________________ test_corrupt_line_fails_closed ________________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_corrupt_line_fails_closed0')
+
+    def test_corrupt_line_fails_closed(tmp_path):
+>       led = _ledger(tmp_path)
+              ^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:194: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+______________________ test_clock_backwards_conservative _______________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_clock_backwards_conservat0')
+
+    def test_clock_backwards_conservative(tmp_path):
+        clk = _Clock()
+>       led = _ledger(tmp_path, clock=clk)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_cost_ledger.py:203: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_cost_ledger.py:131: in _ledger
+    need(cost_ledger, "cost_ledger")
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+___________________________ test_ledger_never_in_tmp ___________________________
+
+    def test_ledger_never_in_tmp():
+>       need(cost_ledger, "cost_ledger")
+
+tests/test_cost_ledger.py:212: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'cost_ledger'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'cost_ledger' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+_________________________ test_until_garbage_rejected __________________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_until_garbage_rejected0/state.json')
+
+    def test_until_garbage_rejected(state):
+        ok, err = st.transition("on_temporary", "user", reason="r", temporary_until="garbage")
+>       assert not ok, "unparseable --until accepted"
+E       AssertionError: unparseable --until accepted
+E       assert not True
+
+tests/test_autopilot_expiry.py:36: AssertionError
+_________________________ test_until_in_past_rejected __________________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_until_in_past_rejected0/state.json')
+
+    def test_until_in_past_rejected(state):
+        ok, _ = st.transition("on_temporary", "user", reason="r", temporary_until="2001-01-01T00:00:00Z")
+>       assert not ok, "past deadline accepted"
+E       AssertionError: past deadline accepted
+E       assert not True
+
+tests/test_autopilot_expiry.py:42: AssertionError
+_____________________ test_until_beyond_max_hours_rejected _____________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_until_beyond_max_hours_re0/state.json')
+
+    def test_until_beyond_max_hours_rejected(state):
+        ok, _ = st.transition("on_temporary", "user", reason="r", temporary_until="2099-01-01T00:00:00Z")
+>       assert not ok, "deadline 70+ years out accepted as 'temporary'"
+E       AssertionError: deadline 70+ years out accepted as 'temporary'
+E       assert not True
+
+tests/test_autopilot_expiry.py:47: AssertionError
+____________________ test_atlas_decision_no_longer_bypasses ____________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_atlas_decision_no_longer_0/state.json')
+
+    def test_atlas_decision_no_longer_bypasses(state):
+        ok, _ = st.transition("on_temporary", "user", reason="atlas-decision: trust me")
+>       assert not ok, "reason text 'atlas-decision' bypassed the deadline"
+E       AssertionError: reason text 'atlas-decision' bypassed the deadline
+E       assert not True
+
+tests/test_autopilot_expiry.py:52: AssertionError
+________________________ test_hook_stops_after_deadline ________________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_hook_stops_after_deadline0/state.json')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd9753460>
+
+    def test_hook_stops_after_deadline(state, monkeypatch):
+        now = dt.datetime.now(dt.timezone.utc)
+        ok, err = st.transition("on_temporary", "user", reason="r", temporary_until=_iso(120, now))
+        assert ok, err
+        monkeypatch.setattr(st, "_now_dt", lambda: now + dt.timedelta(seconds=200), raising=False)
+>       assert hk.should_run_next_cycle() == (False, "expired")
+E       AssertionError: assert (True, 'on_temporary') == (False, 'expired')
+E         
+E         At index 0 diff: True != False
+E         Use -v to get more diff
+
+tests/test_autopilot_expiry.py:66: AssertionError
+______________________ test_clock_rollback_still_expires _______________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_clock_rollback_still_expi0/state.json')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd8e46c50>
+
+    def test_clock_rollback_still_expires(state, monkeypatch):
+        now = dt.datetime.now(dt.timezone.utc)
+        ok, err = st.transition("on_temporary", "user", reason="r", temporary_until=_iso(120, now))
+        assert ok, err
+        real_mono = st._monotonic_ns()
+        # wall clock rolled back an hour, but 200 s really elapsed (same boot)
+        monkeypatch.setattr(st, "_now_dt", lambda: now - dt.timedelta(hours=1), raising=False)
+        monkeypatch.setattr(st, "_monotonic_ns", lambda: real_mono + 200 * 10**9)
+>       assert st.read_state().mode == "off"
+E       AssertionError: assert 'on_temporary' == 'off'
+E         
+E         - off
+E         + on_temporary
+
+tests/test_autopilot_expiry.py:81: AssertionError
+__________________________ test_crash_restart_reverts __________________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_crash_restart_reverts0/state.json')
+
+    def test_crash_restart_reverts(state):
+        raw = {
+            "version": 1, "mode": "on_temporary", "set_by": "user",
+            "set_at": _iso(-7200), "temporary_until": _iso(-60),
+            "temporary_reason": "r", "user_lock": False, "transition_history": [],
+        }
+        state.write_text(json.dumps(raw))
+>       assert st.read_state().mode == "off"
+E       AssertionError: assert 'on_temporary' == 'off'
+E         
+E         - off
+E         + on_temporary
+
+tests/test_autopilot_expiry.py:91: AssertionError
+______________________ test_corrupt_deadline_fails_closed ______________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_corrupt_deadline_fails_cl0/state.json')
+
+    def test_corrupt_deadline_fails_closed(state):
+        raw = {
+            "version": 1, "mode": "on_temporary", "set_by": "atlas",
+            "set_at": _iso(0), "temporary_until": "sometext",
+            "temporary_reason": "r", "user_lock": False, "transition_history": [],
+        }
+        state.write_text(json.dumps(raw))
+        ok, why = hk.should_run_next_cycle()
+>       assert (ok, why) == (False, "expired")
+E       AssertionError: assert (True, 'on_temporary') == (False, 'expired')
+E         
+E         At index 0 diff: True != False
+E         Use -v to get more diff
+
+tests/test_autopilot_expiry.py:102: AssertionError
+________________________ test_system_actor_only_expires ________________________
+
+state = PosixPath('/tmp/pytest-of-box/pytest-50/test_system_actor_only_expires0/state.json')
+
+    def test_system_actor_only_expires(state):
+        ok, err = st.transition("on_temporary", "user", reason="r", temporary_until=_iso(600))
+        assert ok, err
+        assert not st.transition("off", "system", reason="because")[0]
+>       assert st.transition("off", "system", reason="expired:manual")[0]
+E       assert False
+
+tests/test_autopilot_expiry.py:109: AssertionError
+____________________ test_runner_aborts_mid_watch_on_expiry ____________________
+
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_runner_aborts_mid_watch_o0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd8c2c750>
+
+    def test_runner_aborts_mid_watch_on_expiry(tmp_path, monkeypatch):
+        isolate_runner(tmp_path, monkeypatch, mode="none")
+        try:
+            now = dt.datetime.now(dt.timezone.utc)
+            ok, err = st.transition("on_temporary", "user", reason="r", temporary_until=_iso(120, now))
+            assert ok, err
+            calls = []
+    
+            def fake(cycle_idx, **kw):
+                calls.append(cycle_idx)
+                # deadline passes during the first cycle
+                monkeypatch.setattr(st, "_now_dt", lambda: now + dt.timedelta(seconds=300), raising=False)
+                if len(calls) >= 3:  # safety stop for pre-fix code
+                    (tmp_path / "old-autopilot.stop").write_text("")
+                    cd = __import__("tests._fix_helpers", fromlist=["opt"]).opt("control_dir")
+                    if cd:
+                        cd.request_stop("test")
+                d = tmp_path / f"c{len(calls)}"
+                d.mkdir()
+                r = archloop_runner.CycleResult(cycle=cycle_idx, cycle_dir=d)
+                r.satisfied = False
+                return r
+    
+            monkeypatch.setattr(archloop_runner, "run_cycle", fake)
+            archloop_runner.main(["--watch", "--watch-interval", "0", "--max-watch-hours", "1"])
+>           assert len(calls) == 1, f"runner kept cycling after deadline: {len(calls)} cycles"
+E           AssertionError: runner kept cycling after deadline: 3 cycles
+E           assert 3 == 1
+E            +  where 3 = len([1, 2, 3])
+
+tests/test_autopilot_expiry.py:137: AssertionError
+----------------------------- Captured stdout call -----------------------------
+{"event": "cycle_done", "cycle": 1, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_runner_aborts_mid_watch_o0/c1", "satisfied": false, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.0, "watch": true}
+{"event": "watch_sleep", "cycle": 1, "sleep_s": 0, "reason": "default"}
+{"event": "cycle_done", "cycle": 2, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_runner_aborts_mid_watch_o0/c2", "satisfied": false, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.0, "watch": true}
+{"event": "watch_sleep", "cycle": 2, "sleep_s": 0, "reason": "default"}
+{"event": "cycle_done", "cycle": 3, "cycle_dir": "/tmp/pytest-of-box/pytest-50/test_runner_aborts_mid_watch_o0/c3", "satisfied": false, "verdict": "UNKNOWN", "aborted": null, "cost_usd_total": 0.0, "watch": true}
+{"event": "watch_sleep", "cycle": 3, "sleep_s": 0, "reason": "default"}
+{"event": "exit", "reason": "kill_file", "cycle": 4}
+_______________________ test_default_control_dir_not_tmp _______________________
+
+    def test_default_control_dir_not_tmp():
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:25: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+__________________________ test_env_override_ignored ___________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_env_override_ignored0/control'), 'counters': PosixPath('/tmp/...override_ignored0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_env_override_ignored0/logs'), ...}
+
+    def test_env_override_ignored(env):
+        """AUTOPILOT_KILL_FILE must no longer redirect (or be the) kill switch."""
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:33: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+________________________ test_missing_control_dir_stops ________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_missing_control_dir_stops0/control'), 'counters': PosixPath('...l_dir_stops0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_missing_control_dir_stops0/logs'), ...}
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_missing_control_dir_stops0')
+
+    def test_missing_control_dir_stops(env, tmp_path):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:41: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+____________________________ test_loose_perms_stop _____________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_loose_perms_stop0/control'), 'counters': PosixPath('/tmp/pyte...est_loose_perms_stop0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_loose_perms_stop0/logs'), ...}
+
+    def test_loose_perms_stop(env):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:48: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+_______________________ test_symlinked_control_dir_stops _______________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_symlinked_control_dir_sto0/control'), 'counters': PosixPath('...rol_dir_sto0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_symlinked_control_dir_sto0/logs'), ...}
+tmp_path = PosixPath('/tmp/pytest-of-box/pytest-50/test_symlinked_control_dir_sto0')
+
+    def test_symlinked_control_dir_stops(env, tmp_path):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:56: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+________________________ test_missing_run_marker_stops _________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_missing_run_marker_stops0/control'), 'counters': PosixPath('/...marker_stops0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_missing_run_marker_stops0/logs'), ...}
+
+    def test_missing_run_marker_stops(env):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:64: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+____________________________ test_stat_error_stops _____________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_stat_error_stops0/control'), 'counters': PosixPath('/tmp/pyte...est_stat_error_stops0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_stat_error_stops0/logs'), ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f8dd975af90>
+
+    def test_stat_error_stops(env, monkeypatch):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+________________________ test_runner_counts_unreadable _________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_runner_counts_unreadable0/control'), 'counters': PosixPath('/...s_unreadable0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_runner_counts_unreadable0/logs'), ...}
+
+    def test_runner_counts_unreadable(env):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:81: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+_______________________ test_healthy_dir_runs_and_resume _______________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_healthy_dir_runs_and_resu0/control'), 'counters': PosixPath('...ns_and_resu0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_healthy_dir_runs_and_resu0/logs'), ...}
+
+    def test_healthy_dir_runs_and_resume(env):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+__________________________ test_cli_status_exit_codes __________________________
+
+env = {'control': PosixPath('/tmp/pytest-of-box/pytest-50/test_cli_status_exit_codes0/control'), 'counters': PosixPath('/tmp...atus_exit_codes0/ledger'), 'log_root': PosixPath('/tmp/pytest-of-box/pytest-50/test_cli_status_exit_codes0/logs'), ...}
+capsys = <_pytest.capture.CaptureFixture object at 0x7f8dd96f78c0>
+
+    def test_cli_status_exit_codes(env, capsys):
+>       need(control_dir, "control_dir")
+
+tests/test_kill_switch.py:100: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+mod = None, name = 'control_dir'
+
+    def need(mod, name: str):
+        if mod is None:
+>           pytest.fail(f"module {name!r} does not exist (fix not applied)")
+E           Failed: module 'control_dir' does not exist (fix not applied)
+
+tests/_fix_helpers.py:33: Failed
+==================================== PASSES ====================================
+________________________ test_cli_rejects_actor_system _________________________
+----------------------------- Captured stderr call -----------------------------
+usage: autopilot temp [-h] [--until UNTIL] [--actor {atlas,user}] reason
+autopilot temp: error: argument --actor: invalid choice: 'system' (choose from atlas, user)
+=========================== short test summary info ============================
+PASSED tests/test_autopilot_expiry.py::test_system_actor_cannot_turn_on
+PASSED tests/test_autopilot_expiry.py::test_cli_rejects_actor_system
+PASSED tests/test_autopilot_expiry.py::test_on_permanent_unaffected
+PASSED tests/test_autopilot_expiry.py::test_valid_future_deadline_runs
+FAILED tests/test_cost_ledger.py::test_cap_persists_across_invocations - Asse...
+FAILED tests/test_cost_ledger.py::test_cli_cannot_raise_cap - AssertionError:...
+FAILED tests/test_cost_ledger.py::test_unparseable_cost_line_fails_closed - A...
+FAILED tests/test_cost_ledger.py::test_cross_exam_timeout_is_not_free - Asser...
+FAILED tests/test_cost_ledger.py::test_templates_have_no_cost_flag - Assertio...
+FAILED tests/test_cost_ledger.py::test_runner_refuses_when_ledger_unsafe - Fa...
+FAILED tests/test_cost_ledger.py::test_rolling_window_expires - Failed: modul...
+FAILED tests/test_cost_ledger.py::test_crash_after_reserve_counts - Failed: m...
+FAILED tests/test_cost_ledger.py::test_concurrent_reserve_never_exceeds - Fai...
+FAILED tests/test_cost_ledger.py::test_bad_perms_refuse - Failed: module 'cos...
+FAILED tests/test_cost_ledger.py::test_deleted_ledger_is_tamper_not_reset - F...
+FAILED tests/test_cost_ledger.py::test_corrupt_line_fails_closed - Failed: mo...
+FAILED tests/test_cost_ledger.py::test_clock_backwards_conservative - Failed:...
+FAILED tests/test_cost_ledger.py::test_ledger_never_in_tmp - Failed: module '...
+FAILED tests/test_autopilot_expiry.py::test_until_garbage_rejected - Assertio...
+FAILED tests/test_autopilot_expiry.py::test_until_in_past_rejected - Assertio...
+FAILED tests/test_autopilot_expiry.py::test_until_beyond_max_hours_rejected
+FAILED tests/test_autopilot_expiry.py::test_atlas_decision_no_longer_bypasses
+FAILED tests/test_autopilot_expiry.py::test_hook_stops_after_deadline - Asser...
+FAILED tests/test_autopilot_expiry.py::test_clock_rollback_still_expires - As...
+FAILED tests/test_autopilot_expiry.py::test_crash_restart_reverts - Assertion...
+FAILED tests/test_autopilot_expiry.py::test_corrupt_deadline_fails_closed - A...
+FAILED tests/test_autopilot_expiry.py::test_system_actor_only_expires - asser...
+FAILED tests/test_autopilot_expiry.py::test_runner_aborts_mid_watch_on_expiry
+FAILED tests/test_kill_switch.py::test_default_control_dir_not_tmp - Failed: ...
+FAILED tests/test_kill_switch.py::test_env_override_ignored - Failed: module ...
+FAILED tests/test_kill_switch.py::test_missing_control_dir_stops - Failed: mo...
+FAILED tests/test_kill_switch.py::test_loose_perms_stop - Failed: module 'con...
+FAILED tests/test_kill_switch.py::test_symlinked_control_dir_stops - Failed: ...
+FAILED tests/test_kill_switch.py::test_missing_run_marker_stops - Failed: mod...
+FAILED tests/test_kill_switch.py::test_stat_error_stops - Failed: module 'con...
+FAILED tests/test_kill_switch.py::test_runner_counts_unreadable - Failed: mod...
+FAILED tests/test_kill_switch.py::test_healthy_dir_runs_and_resume - Failed: ...
+FAILED tests/test_kill_switch.py::test_cli_status_exit_codes - Failed: module...
+34 failed, 4 passed in 0.22s

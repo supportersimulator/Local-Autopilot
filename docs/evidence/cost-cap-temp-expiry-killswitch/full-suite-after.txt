@@ -1,0 +1,8 @@
+.................ss.................s................................... [ 34%]
+........................................................................ [ 69%]
+...............................................................          [100%]
+=========================== short test summary info ============================
+SKIPPED [1] tests/invariance/test_invariant_live_data.py:94: synaptic_client.fetch_complexity_vectors not present — no-cache invariant covered by archloop pull_live_state tests
+SKIPPED [1] tests/invariance/test_invariant_live_data.py:129: F2 synaptic_client not shipped yet
+SKIPPED [1] tests/invariance/test_invariant_resource_caps.py:222: archloop_runner.Runner class not present — caps invariant covered by tests/test_archloop.py::test_cost_cap_accumulates_*
+204 passed, 3 skipped in 109.39s (0:01:49)

@@ -38,7 +38,16 @@ logger = logging.getLogger("autopilot.state")
 # ----------------------------------------------------------------------------
 
 VALID_MODES: frozenset[str] = frozenset({"off", "on_permanent", "on_temporary"})
-VALID_ACTORS: frozenset[str] = frozenset({"user", "atlas"})
+VALID_ACTORS: frozenset[str] = frozenset({"user", "atlas", "system"})
+# Actors a human/CLI may name. "system" is internal: it may ONLY perform the
+# automatic `on_temporary -> off` expiry (reason prefix "expired:").
+CLI_ACTORS: frozenset[str] = frozenset({"user", "atlas"})
+SYSTEM_EXPIRY_PREFIX = "expired:"
+# Temporary mode must be bounded: deadline in (now+60s, now+MAX_TEMP_HOURS].
+MIN_TEMP_LEAD_S = 60
+MAX_TEMP_HOURS = 8
+# Atlas elevation without an explicit deadline gets this, never unbounded.
+DEFAULT_TEMP_MINUTES = 30
 SCHEMA_VERSION = 1
 HISTORY_CAP = 1000
 
@@ -118,6 +127,9 @@ class State:
     temporary_reason: Optional[str]
     user_lock: bool
     transition_history: tuple[dict[str, Any], ...]
+    # Rollback guard for temporary expiry (same boot -> monotonic elapsed).
+    temporary_set_monotonic_ns: Optional[int] = None
+    temporary_set_boot_id: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -129,6 +141,8 @@ class State:
             "temporary_reason": self.temporary_reason,
             "user_lock": self.user_lock,
             "transition_history": list(self.transition_history),
+            "temporary_set_monotonic_ns": self.temporary_set_monotonic_ns,
+            "temporary_set_boot_id": self.temporary_set_boot_id,
         }
 
 
@@ -150,12 +164,99 @@ def _default_state() -> State:
 # ----------------------------------------------------------------------------
 
 
+def _now_dt() -> dt.datetime:
+    """Wall clock (UTC, tz-aware). Indirection so tests can move time."""
+    return dt.datetime.now(dt.timezone.utc)
+
+
 def _now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="microseconds")
+    return _now_dt().isoformat(timespec="microseconds")
 
 
 def _monotonic_ns() -> int:
     return time.monotonic_ns()
+
+
+_BOOT_ID_CACHE: list = []
+
+
+def _boot_id() -> Optional[str]:
+    """Identifier of the current boot (None if unknown -> wall clock only)."""
+    if _BOOT_ID_CACHE:
+        return _BOOT_ID_CACHE[0]
+    bid: Optional[str] = None
+    try:
+        bid = Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        try:
+            import subprocess
+            out = subprocess.run(["sysctl", "-n", "kern.boottime"],
+                                 capture_output=True, text=True, timeout=2)
+            bid = out.stdout.strip() or None
+        except Exception:  # noqa: BLE001
+            bid = None
+    _BOOT_ID_CACHE.append(bid)
+    return bid
+
+
+def parse_deadline(value: Any, now: Optional[dt.datetime] = None) -> dt.datetime:
+    """Parse + bound-check a temporary_until value. Raises ValueError.
+
+    Requires ISO-8601 with a timezone (a trailing 'Z' is accepted), strictly
+    later than now + MIN_TEMP_LEAD_S and no later than now + MAX_TEMP_HOURS.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("temporary_until is required (ISO-8601 with timezone)")
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        d = dt.datetime.fromisoformat(text)
+    except ValueError:
+        raise ValueError(f"temporary_until {value!r} is not ISO-8601") from None
+    if d.tzinfo is None:
+        raise ValueError(f"temporary_until {value!r} has no timezone (add Z or +HH:MM)")
+    now = now or _now_dt()
+    if d <= now + dt.timedelta(seconds=MIN_TEMP_LEAD_S):
+        raise ValueError(f"temporary_until {value!r} is in the past or < {MIN_TEMP_LEAD_S}s away")
+    if d > now + dt.timedelta(hours=MAX_TEMP_HOURS):
+        raise ValueError(
+            f"temporary_until {value!r} is more than {MAX_TEMP_HOURS}h away; "
+            "use `autopilot on` (user-only on_permanent) for unbounded runs"
+        )
+    return d
+
+
+def _expired(state: "State") -> bool:
+    """True if an on_temporary state is past its deadline. Fail closed:
+    a missing/unparseable deadline counts as expired."""
+    if state.mode != "on_temporary":
+        return False
+    raw = state.temporary_until
+    try:
+        text = str(raw).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        deadline = dt.datetime.fromisoformat(text)
+        if deadline.tzinfo is None:
+            return True
+    except (TypeError, ValueError):
+        return True
+    if _now_dt() >= deadline:
+        return True
+    # Wall clock rolled back? On the same boot, monotonic elapsed since the
+    # elevation was set is authoritative.
+    if (state.temporary_set_monotonic_ns is not None
+            and state.temporary_set_boot_id is not None
+            and state.temporary_set_boot_id == _boot_id()):
+        try:
+            set_at = dt.datetime.fromisoformat(state.set_at)
+            budget_ns = (deadline - set_at).total_seconds() * 1e9
+            if _monotonic_ns() - int(state.temporary_set_monotonic_ns) >= budget_ns:
+                return True
+        except (TypeError, ValueError):
+            return True
+    return False
 
 
 # ----------------------------------------------------------------------------
@@ -258,6 +359,8 @@ def _validate_raw(raw: dict[str, Any]) -> Optional[State]:
             temporary_reason=temporary_reason,
             user_lock=user_lock,
             transition_history=tuple(history),
+            temporary_set_monotonic_ns=raw.get("temporary_set_monotonic_ns"),
+            temporary_set_boot_id=raw.get("temporary_set_boot_id"),
         )
     except (KeyError, ValueError, TypeError) as e:
         _incr("autopilot_state_corruption_total", reason="schema")
@@ -292,7 +395,7 @@ def _atomic_write(state: State) -> None:
 # ----------------------------------------------------------------------------
 
 
-def read_state() -> State:
+def read_state(enforce_expiry: bool = True) -> State:
     """Return current state. If missing or corrupt → write default and return it.
 
     Corruption-tolerant: a half-written JSON file does not crash the loop. It is
@@ -317,7 +420,44 @@ def read_state() -> State:
             state = _default_state()
             _atomic_write(state)
             return state
+        if enforce_expiry:
+            validated, _ = _expire_locked(validated)
         return validated
+
+
+def _expire_locked(state: State) -> tuple[State, bool]:
+    """Caller holds _locked(). Revert an expired on_temporary to off as the
+    internal `system` actor. Returns (state, did_expire)."""
+    if not _expired(state):
+        return state, False
+    reason = f"{SYSTEM_EXPIRY_PREFIX}{state.temporary_until}"
+    now = _now_iso()
+    hist = list(state.transition_history)
+    hist.append({"ts": now, "monotonic_ns": _monotonic_ns(), "from": state.mode,
+                 "to": "off", "actor": "system", "reason": reason,
+                 "temporary_until": None})
+    new_state = State(version=SCHEMA_VERSION, mode="off", set_by="system",
+                      set_at=now, temporary_until=None, temporary_reason=None,
+                      user_lock=False, transition_history=tuple(hist[-HISTORY_CAP:]))
+    _incr("autopilot_transitions_total", actor="system", from_mode="on_temporary",
+          to_mode="off", outcome="allowed")
+    _incr("autopilot_temporary_expired_total")
+    logger.warning("autopilot temporary mode expired (%s); reverted to off", reason)
+    _atomic_write(new_state)
+    return new_state, True
+
+
+def expire_if_due() -> bool:
+    """Enforce the temporary deadline now. True iff this call reverted it."""
+    with _locked():
+        raw = _read_raw()
+        if raw is None:
+            return False
+        validated = _validate_raw(raw)
+        if validated is None:
+            return False
+        _, did = _expire_locked(validated)
+        return did
 
 
 def is_active() -> bool:
@@ -355,6 +495,13 @@ def _check_transition(
     # smuggle a "successful" deactivation past the actor gate when user-off lands
     # first under flock contention.
 
+    # Invariant 6: `system` may ONLY auto-expire on_temporary -> off.
+    if actor == "system":
+        if not (current.mode == "on_temporary" and new_mode == "off"
+                and (reason or "").startswith(SYSTEM_EXPIRY_PREFIX)):
+            return False, "invariant:system_actor_only_expires_temporary"
+        return True, ""
+
     # Invariant 4: Atlas CANNOT set on_permanent.
     if actor == "atlas" and new_mode == "on_permanent":
         return False, "invariant:atlas_cannot_set_on_permanent"
@@ -383,11 +530,15 @@ def _check_transition(
     # Note: this fires even for no-op (current == new_mode) transitions to
     # `on_temporary`, so a stuck bad state CANNOT be re-entered without a
     # proper bound. The same-mode shortcut now sits AFTER this check.
+    # The deadline is PARSED and bounded (MIN_TEMP_LEAD_S..MAX_TEMP_HOURS).
+    # The old "atlas-decision in reason" bypass is gone: any actor could type
+    # it. Atlas without --until gets DEFAULT_TEMP_MINUTES stamped by
+    # transition() before this check.
     if new_mode == "on_temporary":
-        has_until = temporary_until is not None and str(temporary_until).strip() != ""
-        has_atlas_decision = "atlas-decision" in (reason or "")
-        if not has_until and not has_atlas_decision:
-            return False, "invariant:temporary_bounded:requires_until_or_atlas_decision"
+        try:
+            parse_deadline(temporary_until)
+        except ValueError as e:
+            return False, f"invariant:temporary_bounded:{e}"
 
     # No-op (same mode) is allowed but recorded — only AFTER all actor + bounded
     # invariants above have been re-validated. Prevents stuck bad states from
@@ -410,9 +561,15 @@ def transition(
     Returns (success, message). On failure, message starts with 'invariant:' or
     'io:'. On success, message is empty. State counters are always advanced.
     """
+    if (new_mode == "on_temporary" and actor == "atlas"
+            and (temporary_until is None or str(temporary_until).strip() == "")):
+        temporary_until = (
+            _now_dt() + dt.timedelta(minutes=DEFAULT_TEMP_MINUTES)
+        ).isoformat()
     with _locked():
         try:
             current = _read_current_or_default()
+            current, _ = _expire_locked(current)
         except OSError as e:
             return False, f"io:read:{e}"
 
@@ -466,6 +623,12 @@ def transition(
             ),
             user_lock=(new_mode == "on_permanent"),
             transition_history=tuple(new_history),
+            temporary_set_monotonic_ns=(
+                _monotonic_ns() if new_mode == "on_temporary" else None
+            ),
+            temporary_set_boot_id=(
+                _boot_id() if new_mode == "on_temporary" else None
+            ),
         )
 
         try:

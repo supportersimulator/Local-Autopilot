@@ -52,6 +52,9 @@ _info() { echo "[install-daemon] $*"; }
 [ -f "$REPO_DIR/daemons/autopilot-tick.service.template" ] || _fail "service template missing"
 [ -f "$REPO_DIR/daemons/autopilot-tick.timer.template" ] || _fail "timer template missing"
 [ -x "$REPO_DIR/.venv/bin/python3" ] || _fail "venv missing — run 'bash install.sh' first"
+# Kill-switch control dir must exist (runner fails closed without it).
+"$REPO_DIR/.venv/bin/python3" -m local_autopilot.tools.control_dir init >/dev/null \
+    || _fail "could not initialise control dir (python -m local_autopilot.tools.control_dir init)"
 
 mkdir -p "$USER_UNIT_DIR"
 

@@ -71,8 +71,8 @@
     <string>local_autopilot.tools.archloop_runner</string>
     <string>--cycles</string>
     <string>1</string>
-    <string>--cost-cap-usd</string>
-    <string>50.00</string>
+    <!-- No cost flag: the cap is cost_cap_usd_per_window in config.yaml,
+         enforced across ticks by the persistent cost ledger. -->
   </array>
 
   <key>WorkingDirectory</key>

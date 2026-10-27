@@ -30,8 +30,14 @@ openai_base_url: https://api.openai.com/v1
 # --- Cycle policy -------------------------------------------------------------
 # Hard cap on cycles per `archloop_runner.py` invocation.
 max_cycles: 10
-# Cumulative cost cap in USD. Heuristic — see SKILL.md "Cost-cap accounting".
-cost_cap_usd: 5.0
+# SINGLE source of truth for the spending cap, enforced ACROSS invocations by
+# the persistent ledger (~/.local/state/local-autopilot/ledger.jsonl on Linux,
+# ~/Library/Application Support/Local-Autopilot/ on macOS). The daemon ticks
+# every 30 min; this caps the total, not each tick. --cost-cap-usd and
+# $AUTOPILOT_COST_CAP_USD may only LOWER it.
+cost_cap_usd_per_window: 50.0
+# rolling_24h | calendar_day_local
+cost_window: rolling_24h
 # Per-agent token estimate (drives cost-cap math).
 per_agent_usd: 0.27
 

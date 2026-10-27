@@ -27,6 +27,11 @@ for _p in (_TOOLS_DIR, _PKG_ROOT):
 import autopilot_state as st  # noqa: E402
 import autopilot_hook as hk  # noqa: E402
 
+import datetime as _dt
+
+# Deadlines are now parsed and bounded (<= MAX_TEMP_HOURS); 2099 is rejected.
+_FUTURE = (_dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=1)).isoformat()
+
 
 @pytest.fixture
 def tmp_state(tmp_path, monkeypatch):
@@ -78,7 +83,7 @@ def test_user_can_set_on_permanent(tmp_state):
 
 
 def test_user_can_set_on_temporary(tmp_state):
-    ok, err = st.transition("on_temporary", actor="user", reason="trying-it", temporary_until="2099-01-01T00:00:00Z")
+    ok, err = st.transition("on_temporary", actor="user", reason="trying-it", temporary_until=_FUTURE)
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -89,7 +94,7 @@ def test_user_can_set_on_temporary(tmp_state):
 def test_atlas_can_set_on_temporary_from_off(tmp_state):
     ok, err = st.transition(
         "on_temporary", actor="atlas", reason="hardening_pass"
-    , temporary_until="2099-01-01T00:00:00Z")
+    , temporary_until=_FUTURE)
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -97,7 +102,7 @@ def test_atlas_can_set_on_temporary_from_off(tmp_state):
 
 
 def test_atlas_can_clear_on_temporary(tmp_state):
-    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")[0]
+    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until=_FUTURE)[0]
     ok, err = st.transition("off", actor="atlas", reason="done")
     assert ok, err
     assert st.read_state().mode == "off"
@@ -116,7 +121,7 @@ def test_user_can_swap_on_permanent_to_on_temporary(tmp_state):
     assert st.transition("on_permanent", actor="user")[0]
     ok, err = st.transition(
         "on_temporary", actor="user", reason="aaron-downgraded"
-    , temporary_until="2099-01-01T00:00:00Z")
+    , temporary_until=_FUTURE)
     assert ok, err
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -136,7 +141,7 @@ def test_atlas_cannot_set_on_permanent_from_off(tmp_state):
 
 
 def test_atlas_cannot_set_on_permanent_from_on_temporary(tmp_state):
-    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")[0]
+    assert st.transition("on_temporary", actor="atlas", reason="r", temporary_until=_FUTURE)[0]
     ok, err = st.transition(
         "on_permanent", actor="atlas", reason="sneaky-upgrade"
     )
@@ -156,7 +161,7 @@ def test_atlas_cannot_clear_on_permanent(tmp_state):
 def test_atlas_cannot_demote_on_permanent_to_temporary(tmp_state):
     """Closing the side-door: temp→off by Atlas would effectively clear the lock."""
     assert st.transition("on_permanent", actor="user")[0]
-    ok, err = st.transition("on_temporary", actor="atlas", reason="back-door", temporary_until="2099-01-01T00:00:00Z")
+    ok, err = st.transition("on_temporary", actor="atlas", reason="back-door", temporary_until=_FUTURE)
     assert ok is False
     assert "user_lock" in err
     assert st.read_state().mode == "on_permanent"
@@ -169,7 +174,7 @@ def test_invalid_mode_is_rejected(tmp_state):
 
 
 def test_invalid_actor_is_rejected(tmp_state):
-    ok, err = st.transition("on_temporary", actor="robot", temporary_until="2099-01-01T00:00:00Z")
+    ok, err = st.transition("on_temporary", actor="robot", temporary_until=_FUTURE)
     assert ok is False
     assert "invalid_actor" in err
 
@@ -253,7 +258,7 @@ def test_concurrent_transitions_are_race_safe(tmp_state):
         # half try to set on_temporary, half try to set off — all as user
         # so they're all individually valid.
         target = "on_temporary" if i % 2 == 0 else "off"
-        ok, err = st.transition(target, actor="user", reason=f"atlas-decision t{i}", temporary_until="2099-01-01T00:00:00Z" if target == "on_temporary" else None)
+        ok, err = st.transition(target, actor="user", reason=f"atlas-decision t{i}", temporary_until=_FUTURE if target == "on_temporary" else None)
         if not ok:
             errors.append(err)
 
@@ -281,7 +286,7 @@ def test_concurrent_transitions_are_race_safe(tmp_state):
 
 
 def test_history_is_monotonic_and_appends(tmp_state):
-    st.transition("on_temporary", actor="atlas", reason="a", temporary_until="2099-01-01T00:00:00Z")
+    st.transition("on_temporary", actor="atlas", reason="a", temporary_until=_FUTURE)
     st.transition("off", actor="atlas", reason="b")
     st.transition("on_permanent", actor="user", reason="c")
     s = st.read_state()
@@ -333,7 +338,7 @@ def test_blocked_transitions_increment_counter(tmp_state):
 def test_is_active_and_is_user_locked(tmp_state):
     assert st.is_active() is False
     assert st.is_user_locked() is False
-    st.transition("on_temporary", actor="atlas", reason="r", temporary_until="2099-01-01T00:00:00Z")
+    st.transition("on_temporary", actor="atlas", reason="r", temporary_until=_FUTURE)
     assert st.is_active() is True
     assert st.is_user_locked() is False
     st.transition("off", actor="atlas")
@@ -361,7 +366,7 @@ def test_hook_should_run_next_cycle_on_permanent(tmp_state):
 
 
 def test_hook_atlas_temp_request_grants_from_off(tmp_state):
-    ok, msg = hk.on_atlas_temp_request("hardening pass", temporary_until="2099-01-01T00:00:00Z")
+    ok, msg = hk.on_atlas_temp_request("hardening pass", temporary_until=_FUTURE)
     assert ok, msg
     s = st.read_state()
     assert s.mode == "on_temporary"
@@ -370,7 +375,7 @@ def test_hook_atlas_temp_request_grants_from_off(tmp_state):
 
 def test_hook_atlas_temp_request_blocked_when_user_locked(tmp_state):
     st.transition("on_permanent", actor="user")
-    ok, msg = hk.on_atlas_temp_request("please?", temporary_until="2099-01-01T00:00:00Z")
+    ok, msg = hk.on_atlas_temp_request("please?", temporary_until=_FUTURE)
     assert ok is False
     assert "user_lock" in msg or "already_on_permanent" in msg
     assert st.read_state().mode == "on_permanent"
@@ -383,7 +388,7 @@ def test_hook_atlas_temp_release_only_from_temporary(tmp_state):
     assert "not_in_temporary" in msg
 
     # Elevate then release.
-    hk.on_atlas_temp_request("r", temporary_until="2099-01-01T00:00:00Z")
+    hk.on_atlas_temp_request("r", temporary_until=_FUTURE)
     ok, msg = hk.on_atlas_temp_release("done")
     assert ok, msg
     assert st.read_state().mode == "off"
@@ -399,12 +404,12 @@ def test_on_temporary_state_schema_is_complete(tmp_state):
         "on_temporary",
         actor="atlas",
         reason="webhook-drift",
-        temporary_until="2026-05-14T18:00:00+00:00",
+        temporary_until=_FUTURE,
     )
     raw = json.loads(tmp_state.read_text())
     assert raw["mode"] == "on_temporary"
     assert raw["set_by"] == "atlas"
-    assert raw["temporary_until"] == "2026-05-14T18:00:00+00:00"
+    assert raw["temporary_until"] == _FUTURE
     assert raw["temporary_reason"] == "webhook-drift"
     assert raw["user_lock"] is False
     assert raw["version"] == st.SCHEMA_VERSION
@@ -414,5 +419,5 @@ def test_on_temporary_state_schema_is_complete(tmp_state):
     assert raw["transition_history"][-1]["actor"] == "atlas"
     assert (
         raw["transition_history"][-1]["temporary_until"]
-        == "2026-05-14T18:00:00+00:00"
+        == _FUTURE
     )

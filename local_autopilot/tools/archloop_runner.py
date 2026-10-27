@@ -89,6 +89,15 @@ except Exception:  # noqa: BLE001
     except Exception:  # noqa: BLE001
         _headless_executor = None
 
+# Bare (sibling) imports, same as agent_dispatch/synaptic_client above, so the
+# runner, CLI and tests share ONE module object (one override / one lock).
+import control_dir as _control_dir  # noqa: E402
+import cost_ledger as _cost_ledger  # noqa: E402
+import autopilot_state as _autopilot_state  # noqa: E402
+
+# Single source of truth for the spending cap (cost_cap_usd_per_window).
+CONFIG_PATH = _REPO_ROOT / "config.yaml"
+
 try:  # ZSF — fleet escalation is optional
     from local_autopilot.tools import fleet_escalate as _fleet_escalate  # noqa: E402
 except Exception:  # noqa: BLE001
@@ -110,9 +119,13 @@ def _counters_path() -> Path:
 
 
 def _kill_file() -> Path:
-    return Path(os.environ.get(
-        "AUTOPILOT_KILL_FILE", "/tmp/autopilot.stop"
-    ))
+    """Path of the STOP file inside the user-only control dir.
+
+    The old `/tmp/autopilot.stop` + `AUTOPILOT_KILL_FILE` override were removed
+    (non-durable, deletable, redirectable). Use `_check_kill()` for the
+    fail-closed decision; this is informational only.
+    """
+    return _control_dir.control_dir() / _control_dir.STOP_NAME
 
 
 def _db_path() -> Path:
@@ -170,6 +183,9 @@ COST_DEEP_EXPLORATION_BUDGET_S = int(os.environ.get(
 COST_CROSS_EXAM_DEFAULT_USD = 0.05
 COST_SYNAPTIC_FALLBACK_USD = 0.005
 COST_PER_AGENT_USD = float(os.environ.get("AUTOPILOT_PER_AGENT_USD", "0.27"))
+# Charged when a paid call's cost is unknown (timeout/exec error/unparseable
+# cost line). Fail closed: assume the worst, and stop the run.
+COST_UNPARSED_PENALTY_USD = float(os.environ.get("AUTOPILOT_COST_UNPARSED_PENALTY_USD", "0.50"))
 
 
 # ---------------------------------------------------------------------------
@@ -199,18 +215,21 @@ def _progress_path() -> Path:
 
 
 def _read_autopilot_mode() -> str:
-    """Call F1's read_state() and return mode. On any failure, returns 'off'."""
+    """Call F1's read_state() and return mode. On any failure, returns 'off'.
+
+    read_state() enforces temporary-mode expiry (on_temporary past its
+    deadline is reverted to off by actor=system before being returned).
+    """
     try:
-        from autopilot_state import read_state  # type: ignore  # F1's module
+        _as = _autopilot_state
         # If AUTOPILOT_STATE_FILE env is set, redirect F1's paths so tests work.
         env_file = os.environ.get("AUTOPILOT_STATE_FILE")
         if env_file:
             try:
-                import autopilot_state as _as  # type: ignore
                 _as.set_state_paths(Path(env_file))
             except Exception:
                 pass
-        s = read_state()
+        s = _as.read_state()
         return getattr(s, "mode", "off")
     except Exception:
         return "off"
@@ -298,6 +317,11 @@ COUNTER_KEYS = (
     "fleet_escalate_attempts",
     "fleet_escalate_delivered",
     "fleet_escalate_errors",
+    # Persistent cost ledger / fail-closed accounting
+    "cost_ledger_unreadable",
+    "cost_unparsed",
+    # Control-dir kill switch unsafe/unreadable (fail closed -> stop)
+    "kill_switch_unreadable",
 )
 
 
@@ -452,7 +476,8 @@ def run_cross_exam(
         return {
             "verdict": "",
             "consensus": 0.0,
-            "cost_usd": 0.0,
+            # Unknown, NOT free: a timed-out/crashed call may have spent.
+            "cost_usd": None,
             "raw": "",
             "decision": "UNKNOWN",
             "error": f"3s_exec:{exc}",
@@ -487,7 +512,11 @@ def parse_3s_verdict(raw: str) -> dict:
                 data = json.loads(s)
                 out["verdict"] = data.get("verdict", "")
                 out["consensus"] = float(data.get("consensus", 0.0))
-                out["cost_usd"] = float(data.get("cost_usd", COST_CROSS_EXAM_DEFAULT_USD))
+                try:
+                    out["cost_usd"] = float(data.get("cost_usd", COST_CROSS_EXAM_DEFAULT_USD))
+                except (TypeError, ValueError):
+                    out["cost_usd"] = None
+                    out["cost_parse_error"] = True
                 v = (data.get("decision") or out["verdict"]).upper()
                 if "SIGN-OFF" in v or "SIGNOFF" in v:
                     out["decision"] = "SIGN-OFF"
@@ -518,7 +547,9 @@ def parse_3s_verdict(raw: str) -> dict:
                     low.split(":", 1)[1].strip().rstrip(",;")
                 )
             except Exception:
-                pass
+                # Fail closed: a cost line we cannot read is unknown cost.
+                out["cost_usd"] = None
+                out["cost_parse_error"] = True
 
     out["verdict"] = raw[:2000]
     return out
@@ -549,6 +580,40 @@ class CycleResult:
     # Mock cost accumulator — only populated on dry-runs so cost-accounting
     # paths can be exercised without polluting real cost_usd.
     cost_usd_dry_run_mock: float = 0.0
+    # Portion of cost_usd already written to the persistent ledger in-cycle.
+    ledger_charged_usd: float = 0.0
+
+
+# Set by main() for the duration of a non-dry-run invocation.
+_ACTIVE_LEDGER = None
+_RUN_ID = ""
+
+
+def _ledger_charge(result: "CycleResult", usd: float) -> None:
+    """Write spend to the persistent ledger as soon as it is committed, so a
+    crash mid-cycle cannot lose it. LedgerError propagates (fail closed)."""
+    if _ACTIVE_LEDGER is None or usd <= 0:
+        return
+    _ACTIVE_LEDGER.charge(f"{_RUN_ID}:c{result.cycle}", usd)
+    result.ledger_charged_usd += usd
+
+
+def _account_cross_exam_cost(result: "CycleResult", verdict: dict, counters: dict) -> float:
+    """Charge the cross-exam cost. Unknown cost -> penalty + abort the run."""
+    raw = verdict.get("cost_usd")
+    try:
+        c = None if raw is None or verdict.get("cost_parse_error") else float(raw)
+    except (TypeError, ValueError):
+        c = None
+    if c is None:
+        _bump(counters, "cost_unparsed",
+              note=f"cross-exam cost unknown ({verdict.get('error')}); charged "
+                   f"${COST_UNPARSED_PENALTY_USD:.2f} and stopped")
+        c = COST_UNPARSED_PENALTY_USD
+        result.aborted = "cost_unknown"
+    result.cost_usd += c
+    _ledger_charge(result, c)
+    return c
 
 
 def _ts_dirname() -> str:
@@ -564,8 +629,23 @@ def _stage(timings: dict[str, float], name: str):
         timings[name] = round(time.time() - t0, 3)
 
 
-def _check_kill() -> bool:
-    return _kill_file().exists()
+_LAST_KILL_REASON = {"reason": ""}
+
+
+def _check_kill(counters: Optional[dict] = None) -> bool:
+    """Fail-closed kill switch: True unless the user-only control dir is
+    healthy and has no STOP file. See control_dir.kill_state()."""
+    state, why = _control_dir.kill_state()
+    _LAST_KILL_REASON["reason"] = why
+    if state == "stop" and why != "stop_file":
+        if counters is not None:
+            _bump(counters, "kill_switch_unreadable",
+                  note=f"{why} — fix with: python -m local_autopilot.tools.control_dir init")
+        print(json.dumps({"event": "kill_switch_stop", "reason": why,
+                          "control_dir": str(_control_dir.control_dir()),
+                          "recover": "python -m local_autopilot.tools.control_dir resume"}),
+              file=sys.stderr)
+    return state == "stop"
 
 
 def run_cycle(
@@ -600,7 +680,7 @@ def run_cycle(
             json.dumps(live_state, indent=2, default=str)
         )
 
-    if _check_kill():
+    if _check_kill(counters):
         result.aborted = "kill_file"
         _bump(counters, "cycles_aborted_kill_file")
         return result
@@ -698,6 +778,7 @@ def run_cycle(
                     result.deep_exploration_cost_usd = deep_summary.cost_usd
                     result.cost_usd += deep_summary.cost_usd
                     cost_so_far += deep_summary.cost_usd
+                    _ledger_charge(result, deep_summary.cost_usd)
                 _bump(
                     counters,
                     "cycles_deep_explored" if (
@@ -727,6 +808,13 @@ def run_cycle(
                 json.dumps(asdict(deep_summary), indent=2, default=str)
             )
 
+    # Temporary mode may have expired (or user turned it off) since the
+    # cycle started: re-check before committing agent spend.
+    if not dry_run and _read_autopilot_mode() == "off":
+        result.aborted = "autopilot_off"
+        _bump(counters, "cycles_aborted_user_off")
+        return result
+
     # --- Stage 4: SPAWN_AGENTS ---
     with _stage(timings, "SPAWN_AGENTS"):
         jobs = write_prompts(cycle_dir, prompts_for_spawn)
@@ -739,6 +827,7 @@ def run_cycle(
         else:
             result.cost_usd += agent_charge
             cost_so_far += agent_charge
+            _ledger_charge(result, agent_charge)
 
     # Cost check after the most expensive stage commits.
     if cost_so_far >= cost_cap and not dry_run:
@@ -863,13 +952,17 @@ def run_cycle(
         )
         if verdict.get("error") and not dry_run:
             _bump(counters, "cross_exam_errors", note=str(verdict["error"]))
-        result.cost_usd += float(verdict.get("cost_usd") or 0.0)
-        cost_so_far += float(verdict.get("cost_usd") or 0.0)
+        if dry_run:
+            pass  # synthetic verdict, $0
+        else:
+            cost_so_far += _account_cross_exam_cost(result, verdict, counters)
         result.verdict_decision = verdict.get("decision", "UNKNOWN")
         if result.verdict_decision == "HOLD":
             _bump(counters, "cross_exam_holds")
         elif result.verdict_decision == "SIGN-OFF":
             _bump(counters, "cross_exam_signoff")
+    if result.aborted == "cost_unknown":
+        return result  # don't spend more after a call of unknown cost
 
     # --- Stage 7: SYNAPTIC_RE_EVAL ---
     with _stage(timings, "SYNAPTIC_RE_EVAL"):
@@ -883,6 +976,7 @@ def run_cycle(
             _bump(counters, "synaptic_call_total")
             result.cost_usd += COST_SYNAPTIC_FALLBACK_USD
             cost_so_far += COST_SYNAPTIC_FALLBACK_USD
+            _ledger_charge(result, COST_SYNAPTIC_FALLBACK_USD)
         (cycle_dir / "synaptic_re_eval.md").write_text(
             f"# Synaptic re-eval (cycle {cycle_idx})\n\n"
             f"satisfied={satisfied}\n\n```\n{raw_sat}\n```\n"
@@ -948,9 +1042,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Max cycles before forced stop (default 10)",
     )
     parser.add_argument(
-        "--cost-cap-usd", type=float,
-        default=float(os.environ.get("AUTOPILOT_COST_CAP_USD", "5.0")),
-        help="Cumulative cost cap in USD (default $5.00)",
+        "--cost-cap-usd", type=float, default=None,
+        help=("May only LOWER the cap. The cap is cost_cap_usd_per_window in "
+              "config.yaml, enforced across invocations via a persistent "
+              "ledger; effective = min(config, this, $AUTOPILOT_COST_CAP_USD)."),
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -1104,7 +1199,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         slice_s = 1.0
         elapsed = 0.0
         while elapsed < seconds:
-            if stop_flag["requested"] or _check_kill():
+            if stop_flag["requested"] or _check_kill(counters):
                 return
             # Mid-sleep state check — flip to off → break out.
             if _read_autopilot_mode() == "off" and not args.dry_run:
@@ -1112,7 +1207,39 @@ def main(argv: Optional[list[str]] = None) -> int:
             time.sleep(min(slice_s, seconds - elapsed))
             elapsed += slice_s
 
-    cost_so_far = 0.0
+    # --- Spending cap: ONE cap per window, persisted across invocations. ---
+    global _ACTIVE_LEDGER, _RUN_ID
+    env_cap_raw = os.environ.get("AUTOPILOT_COST_CAP_USD")
+    try:
+        env_cap = float(env_cap_raw) if env_cap_raw else None
+        policy = _cost_ledger.load_cost_policy(CONFIG_PATH)
+        cost_cap = _cost_ledger.effective_cap(policy.cap_usd, args.cost_cap_usd, env_cap)
+        for src, v in (("--cost-cap-usd", args.cost_cap_usd), ("AUTOPILOT_COST_CAP_USD", env_cap)):
+            if v is not None and v > policy.cap_usd:
+                print(json.dumps({"event": "cost_cap_override_ignored", "source": src,
+                                  "requested": v, "config_cap": policy.cap_usd}),
+                      file=sys.stderr)
+        if args.dry_run:
+            _ACTIVE_LEDGER = None  # dry-runs spend nothing; never touch the ledger
+            cost_so_far = 0.0
+        else:
+            _ACTIVE_LEDGER = _cost_ledger.open_ledger(cost_cap, policy.window)
+            _RUN_ID = f"{os.getpid()}-{int(time.time() * 1000)}"
+            cost_so_far = _ACTIVE_LEDGER.window_total()
+    except (_cost_ledger.LedgerError, ValueError) as exc:
+        _ACTIVE_LEDGER = None
+        _bump(counters, "cost_ledger_unreadable", note=str(exc))
+        _write_counters(counters)
+        print(json.dumps({
+            "event": "exit",
+            "reason": "cost_ledger_unreadable",
+            "error": str(exc),
+            "ledger_dir": str(_cost_ledger.ledger_dir()),
+            "recover": "fix ownership/mode (dir 0700, files 0600) or the line named "
+                       "in the error; do NOT delete the ledger (detected as tamper)",
+        }))
+        return 6
+
     last_result: Optional[CycleResult] = None
     watch_start_ts = time.time()
     cycle_idx = 0
@@ -1208,7 +1335,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                     }))
                     return 0
 
-            if _check_kill():
+            if _check_kill(counters):
                 _bump(counters, "cycles_aborted_kill_file")
                 _write_counters(counters)
                 print(json.dumps({
@@ -1218,7 +1345,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 }))
                 return 0
 
-            if cost_so_far >= args.cost_cap_usd:
+            if cost_so_far >= cost_cap:
                 _bump(counters, "cycles_aborted_cost",
                       note=f"cost={cost_so_far:.2f}")
                 _write_counters(counters)
@@ -1228,16 +1355,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                     "cycle": cycle_idx,
                     "cost_usd_total": round(cost_so_far, 4),
                 }))
-                # In watch mode, cost-cap → exit code 6 so the supervising
-                # launchd/systemd unit can distinguish "ran out of budget"
-                # from clean exit.
-                return 6 if args.watch else 0
+                # Cost-cap → exit code 6 so the supervising launchd/systemd
+                # unit (and the user) can distinguish "ran out of budget"
+                # from clean exit. Dry-runs keep the legacy 0.
+                return 0 if args.dry_run and not args.watch else 6
 
             # Pass force_complexity only when set (test compat — see history).
             run_kwargs = dict(
                 counters=counters,
                 cost_so_far=cost_so_far,
-                cost_cap=args.cost_cap_usd,
+                cost_cap=cost_cap,
                 dry_run=args.dry_run,
             )
             if args.force_complexity:
@@ -1250,8 +1377,22 @@ def main(argv: Optional[list[str]] = None) -> int:
                 run_kwargs["headless_timeout_per_agent_s"] = (
                     args.headless_timeout_per_agent_s
                 )
-            result = run_cycle(cycle_idx, **run_kwargs)
-            cost_so_far += result.cost_usd
+            try:
+                result = run_cycle(cycle_idx, **run_kwargs)
+                if _ACTIVE_LEDGER is not None:
+                    # Book anything not already charged in-cycle, then
+                    # re-read the shared window total (other ticks count).
+                    _ACTIVE_LEDGER.charge(f"{_RUN_ID}:c{cycle_idx}",
+                                          result.cost_usd - result.ledger_charged_usd)
+                    cost_so_far = _ACTIVE_LEDGER.window_total()
+                else:
+                    cost_so_far += result.cost_usd
+            except _cost_ledger.LedgerError as exc:
+                _bump(counters, "cost_ledger_unreadable", note=str(exc))
+                _write_counters(counters)
+                print(json.dumps({"event": "exit", "reason": "cost_ledger_unreadable",
+                                  "error": str(exc), "cycle": cycle_idx}))
+                return 6
             last_result = result
 
             # Persist counters + progress every cycle (ZSF).
@@ -1275,6 +1416,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             if not args.watch:
                 # Original (non-watch) semantics: abort or satisfied → stop.
+                if result.aborted in ("cost_cap", "cost_unknown") and not args.dry_run:
+                    print(json.dumps({"event": "exit", "reason": result.aborted,
+                                      "cycle": cycle_idx,
+                                      "cost_usd_total": round(cost_so_far, 4)}))
+                    return 6
                 if result.aborted:
                     return 0
                 if result.satisfied:
@@ -1288,10 +1434,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
             # --- Watch-mode adaptive backoff ---
             # cost-cap mid-cycle → exit 6 (don't loop into more spend).
-            if result.aborted == "cost_cap":
+            if result.aborted in ("cost_cap", "cost_unknown"):
                 print(json.dumps({
                     "event": "exit",
-                    "reason": "cost_cap",
+                    "reason": result.aborted,
                     "cycle": cycle_idx,
                     "cost_usd_total": round(cost_so_far, 4),
                 }))
